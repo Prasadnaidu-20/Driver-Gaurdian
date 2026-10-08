@@ -1,6 +1,7 @@
 // DriveGuardian dashboard — stream frames to /ws/stream; show performance (Phase 1)
 // and face landmarks / features with an EAR-MAR chart (Phase 2); calibration and the
-// Drowsiness / Distraction cards (Phase 3).
+// Drowsiness / Distraction cards (Phase 3); activity badges, object boxes, the Emotion card
+// and per-component timings (Phase 4).
 //
 // Wire format (client → server), little-endian:
 //   float64 timestamp_ms | uint32 frame_id | JPEG bytes
@@ -45,6 +46,18 @@ const el = {
   calibBanner: document.getElementById("calib-banner"),
   calibCountdown: document.getElementById("calib-countdown"),
   calibBar: document.getElementById("calib-bar"),
+  mLandmarks: document.getElementById("m-landmarks"),
+  mObjects: document.getElementById("m-objects"),
+  mObjectsLabel: document.getElementById("m-objects-label"),
+  mEmotion: document.getElementById("m-emotion"),
+  mEmotionLabel: document.getElementById("m-emotion-label"),
+  mPipeline: document.getElementById("m-pipeline"),
+  objectsStatus: document.getElementById("objects-status"),
+  actPhone: document.getElementById("act-phone"),
+  actDrinking: document.getElementById("act-drinking"),
+  objectsDetections: document.getElementById("objects-detections"),
+  emotionLabel: document.getElementById("emotion-label"),
+  emotionTop: document.getElementById("emotion-top"),
 };
 
 const TASKS = ["drowsiness", "distraction"];
@@ -70,6 +83,8 @@ const OVERLAY_COLORS = {
   mouth: "#f472b6",
   right_iris: "#facc15",
   left_iris: "#facc15",
+  phone: "#ef4444",
+  drink: "#f59e0b",
 };
 
 const state = {
@@ -89,6 +104,7 @@ const state = {
   chart: null,           // Chart.js instance (null if the CDN failed to load)
   chartLastTs: null,     // last frame timestamp added to the chart (ms)
   lastFace: null,        // last face block, redrawn when the landmark toggle changes
+  lastObjects: null,     // last objects block, redrawn with the face
   calibState: null,      // last calibration state from the server
 };
 
@@ -123,7 +139,8 @@ function setButtons() {
 function resetMetrics() {
   state.rtts = [];
   state.framesDone = 0;
-  for (const node of [el.fps, el.rtt, el.backend, el.backendPct, el.lastStatus]) node.textContent = "–";
+  for (const node of [el.fps, el.rtt, el.backend, el.backendPct, el.lastStatus,
+                      el.mLandmarks, el.mObjects, el.mEmotion, el.mPipeline]) node.textContent = "–";
   el.frames.textContent = "0";
 }
 
@@ -147,12 +164,30 @@ function clearOverlay() {
   el.overlay.getContext("2d").clearRect(0, 0, el.overlay.width, el.overlay.height);
 }
 
-function drawOverlay(face) {
+function drawObjects(ctx, objects, W, H) {
+  if (!objects || !objects.detections) return;
+  ctx.lineWidth = 2;
+  ctx.font = "13px system-ui, sans-serif";
+  for (const d of objects.detections) {
+    const [x, y, bw, bh] = d.bbox;
+    const color = OVERLAY_COLORS[d.kind] || "#fff";
+    ctx.strokeStyle = color;
+    ctx.strokeRect(x * W, y * H, bw * W, bh * H);
+    const text = `${d.label} ${(d.conf * 100).toFixed(0)}%`;
+    ctx.fillStyle = color;
+    ctx.fillRect(x * W, y * H - 16, ctx.measureText(text).width + 6, 16);
+    ctx.fillStyle = "#000";
+    ctx.fillText(text, x * W + 3, y * H - 4);
+  }
+}
+
+function drawOverlay(face, objects) {
   clearOverlay();
-  if (!face || !face.detected) return;
   const ctx = el.overlay.getContext("2d");
   const W = el.overlay.width;
   const H = el.overlay.height;
+  if (el.showLandmarks.checked) drawObjects(ctx, objects, W, H);
+  if (!face || !face.detected) return;
   if (face.bbox) {
     const [x, y, bw, bh] = face.bbox;
     ctx.strokeStyle = OVERLAY_COLORS.box;
@@ -360,6 +395,73 @@ function renderTask(key, task) {
   }
 }
 
+// ---------- Activity and Emotion cards ----------
+
+function setActivity(node, active, seconds, mild = false) {
+  node.classList.toggle("active", active);
+  node.classList.toggle("mild", active && mild);
+  const base = node.dataset.base || (node.dataset.base = node.textContent);
+  node.textContent = active ? `${base} ${seconds.toFixed(1)} s` : base;
+}
+
+function renderObjects(objects) {
+  if (!objects) {
+    el.objectsStatus.textContent = "–";
+    el.objectsStatus.className = "badge";
+    setActivity(el.actPhone, false, 0);
+    setActivity(el.actDrinking, false, 0);
+    el.objectsDetections.textContent = "";
+    return;
+  }
+  if (!objects.available) {
+    el.objectsStatus.textContent = "model unavailable";
+    el.objectsStatus.className = "badge bad";
+  } else {
+    el.objectsStatus.textContent = "detecting";
+    el.objectsStatus.className = "badge ok";
+  }
+  const a = objects.activities;
+  setActivity(el.actPhone, a.phone_use, a.phone_s);
+  setActivity(el.actDrinking, a.drinking, a.drinking_s, true);
+  const seen = objects.detections.map((d) => `${d.label} ${(d.conf * 100).toFixed(0)}%`);
+  el.objectsDetections.textContent = seen.length ? `Seen: ${seen.join(" · ")}` : "No phone / cup / bottle in view";
+}
+
+function renderEmotion(emotion) {
+  el.emotionTop.replaceChildren();
+  if (!emotion) {
+    el.emotionLabel.textContent = state.framesDone ? "unavailable" : "–";
+    el.emotionLabel.className = state.framesDone ? "badge bad" : "badge";
+    return;
+  }
+  el.emotionLabel.textContent = emotion.label;
+  el.emotionLabel.className = emotion.label === "unknown" ? "badge" : "badge info";
+  const top = Object.entries(emotion.probabilities).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  for (const [name, p] of top) {
+    const label = document.createElement("span");
+    label.textContent = name;
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    const fill = document.createElement("div");
+    fill.className = "bar-fill";
+    fill.style.width = `${(p * 100).toFixed(0)}%`;
+    bar.append(fill);
+    const pct = document.createElement("span");
+    pct.className = "pct";
+    pct.textContent = `${(p * 100).toFixed(0)}%`;
+    el.emotionTop.append(label, bar, pct);
+  }
+}
+
+function renderComponents(components) {
+  const c = components || {};
+  const ms = (key) => (key in c ? fmtMs(c[key]) : "–");
+  el.mLandmarks.textContent = ms("landmarks_ms");
+  el.mObjects.textContent = ms("objects_ms");
+  el.mEmotion.textContent = ms("emotion_ms");
+  el.mPipeline.textContent = ms("pipeline_ms");
+}
+
 // ---------- WebSocket ----------
 
 function openSocket() {
@@ -473,14 +575,18 @@ function onResult(result) {
   el.backendPct.textContent = `${fmtMs(perf.backend_p50_ms)} / ${fmtMs(perf.backend_p95_ms)}`;
   el.frames.textContent = String(state.framesDone);
   el.lastStatus.textContent = result.status;
+  renderComponents(perf.components);
 
   if (result.status !== "bad_message" && result.status !== "decode_error") {
     state.lastFace = result.face;
-    drawOverlay(result.face);
+    state.lastObjects = result.objects;
+    drawOverlay(result.face, result.objects);
     renderDriverState(result);
     updateChart(result);
     renderCalibration(result.calibration);
     for (const key of TASKS) renderTask(key, result[key]);
+    renderObjects(result.objects);
+    renderEmotion(result.emotion);
   }
 
   scheduleNext();
@@ -506,6 +612,7 @@ function stop(message = "Stopped") {
   state.source = null;
   state.inFlight = false;
   state.lastFace = null;
+  state.lastObjects = null;
   clearOverlay();
   el.calibBanner.hidden = true;
   el.placeholder.hidden = false;
@@ -522,6 +629,8 @@ function beginStreaming(source) {
   resetChart();
   resetCalibration();
   resetTasks();
+  renderObjects(null);
+  renderEmotion(null);
   el.placeholder.hidden = true;
   setButtons();
   openSocket();
@@ -577,7 +686,7 @@ el.video.addEventListener("ended", () => {
   setStatus("Video ended");
 });
 
-el.showLandmarks.addEventListener("change", () => drawOverlay(state.lastFace));
+el.showLandmarks.addEventListener("change", () => drawOverlay(state.lastFace, state.lastObjects));
 
 el.btnCalibrate.addEventListener("click", () => sendCommand({ type: "calibrate" }));
 el.btnCalibClear.addEventListener("click", () => {
@@ -602,6 +711,8 @@ async function init() {
   state.capture.height = h;
   el.overlay.width = w;
   el.overlay.height = h;
+  el.mObjectsLabel.textContent = `Objects (YOLO, every ${state.config.objects_every_n_frames} frames)`;
+  el.mEmotionLabel.textContent = `Emotion (every ${state.config.emotion_every_n_frames} frames)`;
   initChart();
   setButtons();
   setStatus("Idle");

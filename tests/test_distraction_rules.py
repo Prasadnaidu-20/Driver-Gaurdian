@@ -3,6 +3,7 @@
 import pytest
 
 from app.config import load_settings
+from app.estimators.base import Activities, FrameContext
 from app.estimators.distraction_rules import DistractionRules
 from app.pipeline.calibration import Baseline
 
@@ -101,3 +102,52 @@ def test_no_face_reports_unknown(est: DistractionRules) -> None:
     clock = Clock(est)
     clock.run(1, feat())
     assert labels(clock.run(1, None)) == {"unknown"}
+
+
+# ---- Phase 4: activities ----
+
+
+def run_ctx(est: DistractionRules, t0: float, seconds: float, f, activity_fn) -> tuple[list, float]:
+    """Run at 30 fps; activity_fn(elapsed_s) gives the Activities for each frame."""
+    out, t = [], t0
+    for i in range(round(seconds * FPS)):
+        out.append(est.update(f, t, FrameContext(activities=activity_fn(i / FPS))))
+        t += DT
+    return out, t
+
+
+def phone(elapsed: float) -> Activities:
+    s = elapsed + 1.0  # ActivityRules reports phone_use once the phone has been seen for 1 s
+    return Activities(phone_use=True, phone_s=s, reasons=[f"phone use {s:.1f} s"])
+
+
+def no_activity(_: float) -> Activities:
+    return Activities()
+
+
+def test_phone_use_raises_distraction_while_looking_ahead(est: DistractionRules) -> None:
+    out, t = run_ctx(est, 0.0, 5, feat(), no_activity)
+    assert labels(out) == {"attentive"}
+    out, t = run_ctx(est, t, 3, feat(), phone)
+    assert out[-1].label == "distracted"
+    assert out[-1].score > 0.9
+    assert out[-1].reasons[0].startswith("phone use")
+    out, _ = run_ctx(est, t, 5, feat(), no_activity)
+    assert out[-1].label == "attentive"
+
+
+def test_phone_use_without_face_still_scores(est: DistractionRules) -> None:
+    out, _ = run_ctx(est, 0.0, 3, None, phone)
+    assert out[-1].label == "distracted"
+    assert "no face" in out[-1].reasons
+
+
+def test_no_face_without_activity_is_unknown(est: DistractionRules) -> None:
+    out, _ = run_ctx(est, 0.0, 1, None, no_activity)
+    assert labels(out) == {"unknown"}
+
+
+def test_drinking_alone_stays_attentive(est: DistractionRules) -> None:
+    out, _ = run_ctx(est, 0.0, 4, feat(), lambda e: Activities(drinking=True, drinking_s=e + 0.5))
+    assert labels(out) == {"attentive"}
+    assert any(r.startswith("drinking") for r in out[-1].reasons)

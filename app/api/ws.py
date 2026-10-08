@@ -114,6 +114,7 @@ async def stream(websocket: WebSocket) -> None:
                 backend_p50_ms=snap["p50_ms"],
                 backend_p95_ms=snap["p95_ms"],
                 fps=snap["fps"],
+                components=result.perf.components,
             )
             await websocket.send_json(result.model_dump())
     except WebSocketDisconnect:

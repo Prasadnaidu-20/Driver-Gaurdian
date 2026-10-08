@@ -56,6 +56,8 @@ def test_api_config_returns_stream_settings() -> None:
     assert cfg["jpeg_quality"] == 0.7
     assert cfg["perf_window_frames"] >= 2
     assert cfg["chart_window_s"] > 0
+    assert cfg["objects_every_n_frames"] >= 1
+    assert cfg["emotion_every_n_frames"] >= 1
 
 
 def test_ws_round_trip_ok() -> None:
@@ -70,7 +72,10 @@ def test_ws_round_trip_ok() -> None:
             assert result["status"] in ("ok", "no_face")  # synthetic frame has no face
             assert {"available", "detected", "bbox", "features", "landmarks"} <= set(result["face"])
             assert result["perf"]["backend_ms"] > 0
-            assert set(result["perf"]) == {"backend_ms", "backend_p50_ms", "backend_p95_ms", "fps"}
+            assert set(result["perf"]) == {"backend_ms", "backend_p50_ms", "backend_p95_ms", "fps", "components"}
+            assert "pipeline_ms" in result["perf"]["components"]
+            assert {"available", "detections", "activities"} <= set(result["objects"])
+            assert "emotion" in result
         assert result["perf"]["fps"] > 0
 
 

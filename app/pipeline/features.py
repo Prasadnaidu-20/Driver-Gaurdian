@@ -138,6 +138,12 @@ def face_bbox(landmarks: np.ndarray) -> list[float]:
     return [float(x0), float(y0), float(x1 - x0), float(y1 - y0)]
 
 
+def mouth_center(landmarks: np.ndarray) -> tuple[float, float]:
+    """Normalized (x, y) centre of the inner-lip points (used by the drinking rule)."""
+    x, y = landmarks[list(MOUTH_MAR), :2].mean(axis=0)
+    return float(x), float(y)
+
+
 def extract_features(
     landmarks: np.ndarray,
     blendshapes: dict[str, float],

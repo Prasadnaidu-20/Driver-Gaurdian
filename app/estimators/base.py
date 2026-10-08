@@ -2,13 +2,16 @@
 
 Every drowsiness / distraction / emotion estimator (rules, ML, hybrid) implements
 `Estimator` and returns a `TaskOutput`, so `FrameProcessor` and risk fusion do not care
-which implementation runs.
+which implementation runs. Inputs besides the geometric features (the face crop for
+emotion, detected activities for distraction) arrive in an optional `FrameContext`.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
+import numpy as np
 from pydantic import BaseModel, Field
 
 from app.config import LevelSettings
@@ -29,12 +32,31 @@ class TaskOutput(BaseModel):
     details: dict[str, float] = Field(default_factory=dict)     # numeric stats (PERCLOS, durations, counts)
 
 
+class Activities(BaseModel):
+    """Driver activities from object detection (Phase 4). Durations are of the current episode."""
+
+    phone_use: bool = False
+    drinking: bool = False
+    phone_s: float = 0.0       # how long a phone has been near the driver
+    drinking_s: float = 0.0    # how long a cup/bottle has been at the mouth
+    reasons: list[str] = Field(default_factory=list)
+
+
+@dataclass
+class FrameContext:
+    """Per-frame inputs besides the features. Fields are None when not available on this frame."""
+
+    face_crop: np.ndarray | None = None    # crop_face output (RGB); only on frames where emotion should run
+    activities: Activities | None = None   # latest activities; None when object detection is off
+
+
 class Estimator(ABC):
     """Stateful per-stream estimator fed one frame at a time, in frame-timestamp order."""
 
     @abstractmethod
-    def update(self, features: dict[str, float] | None, timestamp_ms: float) -> TaskOutput:
-        """Consume one frame's features (None = no face) and return the current estimate."""
+    def update(self, features: dict[str, float] | None, timestamp_ms: float,
+               context: FrameContext | None = None) -> TaskOutput:
+        """Consume one frame's features (None = no face) plus optional context; return the current estimate."""
 
     @abstractmethod
     def set_baseline(self, baseline: Baseline) -> None:

@@ -6,7 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.estimators.base import TaskOutput
+from app.estimators.base import Activities, TaskOutput
+from app.estimators.objects import Detection
 from app.pipeline.calibration import CalibrationState
 
 # ok: frame processed (face found, or face analysis unavailable/disabled — see face.available)
@@ -21,6 +22,9 @@ class PerfInfo(BaseModel):
     backend_p50_ms: float = 0.0   # rolling median backend processing time
     backend_p95_ms: float = 0.0   # rolling 95th-percentile backend processing time
     fps: float = 0.0              # observed stream/backend FPS (frames completed per second)
+    # Last measured time (ms) of each pipeline component: landmarks_ms, objects_ms, emotion_ms
+    # (heavy models run every N frames, so these are their latest run) and pipeline_ms (this frame).
+    components: dict[str, float] = Field(default_factory=dict)
 
 
 class FaceBlock(BaseModel):
@@ -31,6 +35,14 @@ class FaceBlock(BaseModel):
     bbox: list[float] | None = None            # [x, y, w, h], normalized
     features: dict[str, float] = Field(default_factory=dict)  # see app.pipeline.features.FEATURE_KEYS
     landmarks: dict[str, list[list[float]]] | None = None     # overlay groups -> [[x, y], ...], normalized
+
+
+class ObjectsBlock(BaseModel):
+    """Object detection and activities. Detections are from the latest YOLO run (every N frames)."""
+
+    available: bool = False                                    # YOLO loaded and enabled
+    detections: list[Detection] = Field(default_factory=list)  # phone / cup / bottle boxes
+    activities: Activities = Field(default_factory=Activities)
 
 
 class CalibrationBlock(BaseModel):
@@ -44,7 +56,7 @@ class CalibrationBlock(BaseModel):
 
 
 class FrameResult(BaseModel):
-    """Result for one frame. Later phases add risk blocks here."""
+    """Result for one frame. Phase 5 adds risk blocks here."""
 
     frame_id: int
     timestamp_ms: float  # client-supplied frame timestamp, echoed back
@@ -54,3 +66,5 @@ class FrameResult(BaseModel):
     calibration: CalibrationBlock = Field(default_factory=CalibrationBlock)
     drowsiness: TaskOutput | None = None   # None when disabled or face analysis unavailable
     distraction: TaskOutput | None = None  # None when disabled or face analysis unavailable
+    emotion: TaskOutput | None = None      # None when disabled or its model is unavailable
+    objects: ObjectsBlock = Field(default_factory=ObjectsBlock)

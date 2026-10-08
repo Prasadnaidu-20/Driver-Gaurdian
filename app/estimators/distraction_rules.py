@@ -10,13 +10,18 @@ Continuous component: 0 for off-road episodes shorter than `glance_ignore_s` (mi
 glances), ramping to 1 at `glance_full_s`. Fraction component: share of the last `window_s` spent in short glances
 (off-road time while the episode is still shorter than `glance_ignore_s`), which catches
 frequent glances that are each too short to count on their own.
-score = max(both), then a time-based EMA, then hysteresis → attentive | looking_away | distracted.
+Activity components (Phase 4, from `FrameContext.activities`): phone use ramps from 0 to
+`phone_weight` over `phone_full_s` of continuous use; drinking adds a constant `drinking_weight`.
+score = max(all components), then a time-based EMA, then hysteresis → attentive | looking_away | distracted.
+Phone use is scored even without a face (looking down at a phone often loses the face).
 """
 
 from __future__ import annotations
 
 from app.config import DistractionSettings
-from app.estimators.base import Estimator, TaskOutput, hysteresis_from, no_face_output, ramp
+from app.estimators.base import (
+    Activities, Estimator, FrameContext, TaskOutput, hysteresis_from, no_face_output, ramp,
+)
 from app.pipeline.calibration import Baseline
 from app.temporal.ema import EMA
 from app.temporal.episodes import EpisodeTracker
@@ -64,15 +69,43 @@ class DistractionRules(Estimator):
                 causes.append("gaze off road")
         return causes
 
-    def update(self, features: dict[str, float] | None, timestamp_ms: float) -> TaskOutput:
+    def activity_component(self, activities: Activities | None) -> tuple[float, list[str]]:
+        """Score component and reasons from phone use / drinking."""
+        if activities is None:
+            return 0.0, []
+        cfg = self.cfg
+        value, reasons = 0.0, []
+        if activities.phone_use:
+            value = cfg.phone_weight * ramp(activities.phone_s, 0.0, cfg.phone_full_s)
+            reasons.append(f"phone use {activities.phone_s:.1f} s")
+        if activities.drinking:
+            value = max(value, cfg.drinking_weight)
+            reasons.append(f"drinking {activities.drinking_s:.1f} s")
+        return value, reasons
+
+    def update(self, features: dict[str, float] | None, timestamp_ms: float,
+               context: FrameContext | None = None) -> TaskOutput:
         if self._last_ts is not None and timestamp_ms <= self._last_ts and self._last_output is not None:
             return self._last_output  # duplicate / out-of-order frame: nothing new
         self._last_ts = timestamp_ms
         cfg = self.cfg
+        activities = context.activities if context is not None else None
+        act_c, act_reasons = self.activity_component(activities)
 
         if features is None:
             self._offroad.update(None, timestamp_ms)
-            self._last_output = no_face_output()
+            if activities is None or not activities.phone_use:
+                self._last_output = no_face_output()
+                return self._last_output
+            # No face but a phone in use: score the phone alone.
+            score = self._ema.update(act_c, timestamp_ms)
+            self._last_output = TaskOutput(
+                score=score,
+                label=self._levels.update(score, timestamp_ms),
+                confidence=0.5,  # head pose unknown
+                reasons=act_reasons + ["no face"],
+                details={"raw_score": act_c, "activity_component": act_c},
+            )
             return self._last_output
 
         causes = self.off_road(features)
@@ -87,7 +120,7 @@ class DistractionRules(Estimator):
 
         cont_c = ramp(off_s, cfg.glance_ignore_s, cfg.glance_full_s)
         frac_c = ramp(fraction, cfg.fraction_low, cfg.fraction_high)
-        raw = max(cont_c, frac_c)
+        raw = max(cont_c, frac_c, act_c)
         score = self._ema.update(raw, timestamp_ms)
         label = self._levels.update(score, timestamp_ms)
 
@@ -97,6 +130,8 @@ class DistractionRules(Estimator):
             reasons.append(f"eyes off road {off_s:.1f} s{detail}")
         if frac_c > 0:
             reasons.append(f"frequent glances: off road {fraction:.0%} of last {cfg.window_s:.0f} s")
+        # Most important first: phone use outranks gaze reasons when it drives the score.
+        reasons = act_reasons + reasons if act_c >= max(cont_c, frac_c) else reasons + act_reasons
 
         span = self._window.span_s()
         self._last_output = TaskOutput(
@@ -109,6 +144,7 @@ class DistractionRules(Estimator):
                 "off_road": 1.0 if off else 0.0,
                 "off_road_s": off_s,
                 "glance_fraction": fraction,
+                "activity_component": act_c,
                 "rel_yaw": features["yaw"] - self.baseline.yaw,
                 "rel_pitch": features["pitch"] - self.baseline.pitch,
             },

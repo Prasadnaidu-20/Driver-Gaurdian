@@ -29,8 +29,13 @@ def health() -> dict[str, str]:
 
 @app.get("/api/config")
 def client_config() -> dict[str, Any]:
-    """Settings the browser needs: stream fields (capture size, JPEG quality) plus UI settings."""
-    return {**settings.stream.model_dump(), **settings.ui.model_dump()}
+    """Settings the browser needs: stream fields (capture size, JPEG quality), UI settings, model frame-skips."""
+    return {
+        **settings.stream.model_dump(),
+        **settings.ui.model_dump(),
+        "objects_every_n_frames": settings.objects.every_n_frames,
+        "emotion_every_n_frames": settings.emotion.every_n_frames,
+    }
 
 
 app.include_router(ws_router)

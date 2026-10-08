@@ -90,12 +90,44 @@ distraction:             # Phase 3 — rule-based distraction (eyes off road)
   exit: [0.0, 0.2, 0.45]
   min_enter_s: 0.3
   min_exit_s: 1.5
+  phone_weight: 1.0      # Phase 4: phone-use component reaches this value...
+  phone_full_s: 2.0      # ...after this long of continuous phone use (linear ramp from 0)
+  drinking_weight: 0.2   # Phase 4: constant component while drinking (below looking_away on its own)
 
-objects:                 # placeholder — Phase 4 (YOLO phone / cup / bottle)
-  enabled: false
+objects:                 # Phase 4 — YOLO (ultralytics, AGPL-3.0) phone / cup / bottle → activities
+  enabled: true
+  model_path: models_store/yolo11n.pt   # COCO-pretrained YOLO11 nano
+  model_url: https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt
+  every_n_frames: 3      # run YOLO on every Nth frame; frames in between reuse the last detections
+  imgsz: 640             # YOLO inference size (px); lower (e.g. 480) is faster but misses small objects
+  conf: 0.25             # minimum detection confidence
+  phone_classes: ["cell phone"]      # COCO class names that count as a phone
+  drink_classes: ["cup", "bottle", "wine glass"]   # COCO class names that count as a drink container
+  # A glass at the mouth (hand-occluded) is often misread by YOLO as "cell phone". A phone box that
+  # covers the mouth centre is treated as a drink: phones at the ear sit beside the face, texting is below it.
+  phone_at_mouth_is_drink: true
+  mouth_point_margin: 0.1  # "covers the mouth" = box overlaps a square of half-side this × face width at the mouth centre
+  # Phone region (no hand detector): the face box grown by these multiples of the face size.
+  phone_region_side: 1.0 # face widths added left and right (phone at the ear, hand beside the face)
+  phone_region_up: 0.5   # face heights added above
+  phone_region_down: 2.5 # face heights added below (texting at chest height)
+  mouth_region_scale: 0.6  # drink box must touch a square around the mouth centre, half-side = this × face width
+  phone_min_s: 1.0       # phone in the region this long → phone_use
+  drink_min_s: 0.5       # cup/bottle at the mouth this long → drinking
+  max_gap_s: 1.5         # misses shorter than this don't end an activity (must exceed the YOLO interval)
+  face_hold_s: 1.0       # reuse the last face box this long when the face is lost (e.g. hidden by a cup)
 
-emotion:                 # placeholder — Phase 4 (context only, never raises risk above Low alone)
-  enabled: false
+emotion:                 # Phase 4 — HSEmotion EfficientNet-B0 (AffectNet) ONNX; context only, not in risk yet
+  enabled: true
+  model_path: models_store/enet_b0_8_best_vgaf.onnx
+  model_url: https://github.com/HSE-asavchenko/face-emotion-recognition/raw/main/models/affectnet_emotions/onnx/enet_b0_8_best_vgaf.onnx
+  every_n_frames: 3      # run the model on every Nth frame with a face; frames in between reuse the last result
+  input_size: 224        # model input side (px); the crop_face output is resized to this
+  # Model output order (8 AffectNet classes). Classes not in `classes` (contempt) are dropped and the rest renormalized.
+  model_classes: [anger, contempt, disgust, fear, happy, neutral, sad, surprise]
+  classes: [neutral, happy, sad, surprise, fear, disgust, anger]  # reported classes
+  negative_classes: [sad, fear, disgust, anger]  # score = their summed probability (unused until Phase 5)
+  ema_tau_s: 0.7         # per-class EMA time constant; ~95 % of a change after ~2 s (3τ)
 
 risk:                    # placeholder — Phase 5 (fusion weights, levels, hysteresis)
   enabled: false

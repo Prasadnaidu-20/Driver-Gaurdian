@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections import deque
 
 from app.config import DrowsinessSettings
-from app.estimators.base import Estimator, TaskOutput, hysteresis_from, no_face_output, ramp
+from app.estimators.base import Estimator, FrameContext, TaskOutput, hysteresis_from, no_face_output, ramp
 from app.pipeline.calibration import Baseline
 from app.temporal.ema import EMA
 from app.temporal.episodes import EpisodeTracker
@@ -69,7 +69,8 @@ class DrowsinessRules(Estimator):
 
     # ---- per frame ----
 
-    def update(self, features: dict[str, float] | None, timestamp_ms: float) -> TaskOutput:
+    def update(self, features: dict[str, float] | None, timestamp_ms: float,
+               context: FrameContext | None = None) -> TaskOutput:
         if self._last_ts is not None and timestamp_ms <= self._last_ts and self._last_output is not None:
             return self._last_output  # duplicate / out-of-order frame: nothing new
         self._last_ts = timestamp_ms

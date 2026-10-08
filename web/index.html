@@ -16,7 +16,7 @@
         <input id="file-input" type="file" accept="video/*">
       </label>
       <button id="btn-stop" type="button" disabled>Stop</button>
-      <label class="toggle"><input id="toggle-landmarks" type="checkbox" checked> Show landmarks</label>
+      <label class="toggle"><input id="toggle-landmarks" type="checkbox" checked> Show landmarks &amp; objects</label>
     </div>
     <span id="status" class="status">Idle</span>
   </header>
@@ -43,6 +43,10 @@
           <dt>Round-trip latency (client) p50 / p95</dt><dd id="m-rtt">–</dd>
           <dt>Backend processing latency (now)</dt><dd id="m-backend">–</dd>
           <dt>Backend processing latency p50 / p95</dt><dd id="m-backend-pct">–</dd>
+          <dt>Landmarks</dt><dd id="m-landmarks">–</dd>
+          <dt id="m-objects-label">Objects (YOLO)</dt><dd id="m-objects">–</dd>
+          <dt id="m-emotion-label">Emotion</dt><dd id="m-emotion">–</dd>
+          <dt>Pipeline total (this frame)</dt><dd id="m-pipeline">–</dd>
           <dt>Frames processed</dt><dd id="m-frames">0</dd>
           <dt>Last status</dt><dd id="m-status">–</dd>
         </dl>
@@ -78,13 +82,25 @@
         <p id="drowsiness-details" class="hint"></p>
       </div>
       <div class="card">
+        <h2>Activity <span id="objects-status" class="badge">–</span></h2>
+        <div class="activity-row">
+          <span id="act-phone" class="activity">📱 Phone</span>
+          <span id="act-drinking" class="activity">🥤 Drinking</span>
+        </div>
+        <p id="objects-detections" class="hint"></p>
+      </div>
+      <div class="card">
         <h2>Distraction <span id="distraction-label" class="badge">–</span></h2>
         <div class="bar"><div id="distraction-bar" class="bar-fill"></div></div>
         <div class="score-line">score <span id="distraction-score">–</span></div>
         <ul id="distraction-reasons" class="reasons"></ul>
         <p id="distraction-details" class="hint"></p>
       </div>
-      <div class="card placeholder"><h2>Emotion</h2><p>Phase 4</p></div>
+      <div class="card">
+        <h2>Emotion <span id="emotion-label" class="badge">–</span></h2>
+        <div id="emotion-top" class="emotion-top"></div>
+        <p class="hint">Context only: not part of the risk score yet. Smoothed over ~2 s.</p>
+      </div>
       <div class="card placeholder"><h2>Risk</h2><p>Phase 5</p></div>
       <div class="card placeholder"><h2>Alerts</h2><p>Phase 5</p></div>
     </aside>

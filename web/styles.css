@@ -151,6 +151,23 @@ button:disabled { opacity: 0.4; cursor: default; }
 .reasons { margin: 6px 0 0; padding-left: 18px; font-size: 0.85rem; min-height: 1.2em; }
 .reasons li { margin: 2px 0; }
 
+.activity-row { display: flex; gap: 8px; }
+.activity {
+  flex: 1;
+  text-align: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.activity.active { background: #7f1d1d; border-color: #ef4444; color: #fecaca; font-weight: 600; }
+.activity.active.mild { background: #713f12; border-color: #f59e0b; color: #fde68a; }
+
+.emotion-top { display: grid; grid-template-columns: 70px 1fr 40px; gap: 4px 8px; align-items: center; font-size: 0.85rem; }
+.emotion-top .pct { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+
 .calib-banner {
   position: absolute;
   left: 10%;

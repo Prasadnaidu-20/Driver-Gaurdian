@@ -27,6 +27,8 @@ def model_specs(settings: Settings) -> list[tuple[str, str, Path]]:
     """(name, url, destination) for every downloadable model."""
     return [
         ("face_landmarker", settings.face.model_url, settings.face.resolved_model_path()),
+        ("yolo (objects)", settings.objects.model_url, settings.objects.resolved_model_path()),
+        ("emotion", settings.emotion.model_url, settings.emotion.resolved_model_path()),
     ]
 
 

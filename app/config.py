@@ -48,8 +48,7 @@ class FaceSettings(BaseModel):
 
     def resolved_model_path(self) -> Path:
         """Model path as an absolute path (relative paths are relative to the project root)."""
-        path = Path(self.model_path)
-        return path if path.is_absolute() else PROJECT_ROOT / path
+        return _resolve(self.model_path)
 
 
 class UISettings(BaseModel):
@@ -128,6 +127,62 @@ class DistractionSettings(LevelSettings):
     window_s: float
     fraction_low: float
     fraction_high: float
+    phone_weight: float
+    phone_full_s: float
+    drinking_weight: float
+
+
+def _resolve(path_str: str) -> Path:
+    """Relative paths are relative to the project root."""
+    path = Path(path_str)
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+class ObjectsSettings(BaseModel):
+    enabled: bool
+    model_path: str
+    model_url: str
+    every_n_frames: int
+    imgsz: int
+    conf: float
+    phone_classes: list[str]
+    drink_classes: list[str]
+    phone_region_side: float
+    phone_region_up: float
+    phone_region_down: float
+    mouth_region_scale: float
+    phone_at_mouth_is_drink: bool
+    mouth_point_margin: float
+    phone_min_s: float
+    drink_min_s: float
+    max_gap_s: float
+    face_hold_s: float
+
+    def resolved_model_path(self) -> Path:
+        return _resolve(self.model_path)
+
+
+class EmotionSettings(BaseModel):
+    enabled: bool
+    model_path: str
+    model_url: str
+    every_n_frames: int
+    input_size: int
+    model_classes: list[str]
+    classes: list[str]
+    negative_classes: list[str]
+    ema_tau_s: float
+
+    @model_validator(mode="after")
+    def _check_classes(self) -> "EmotionSettings":
+        if not set(self.classes) <= set(self.model_classes):
+            raise ValueError("emotion.classes must be a subset of emotion.model_classes")
+        if not set(self.negative_classes) <= set(self.classes):
+            raise ValueError("emotion.negative_classes must be a subset of emotion.classes")
+        return self
+
+    def resolved_model_path(self) -> Path:
+        return _resolve(self.model_path)
 
 
 class LoggingSettings(BaseModel):
@@ -146,8 +201,8 @@ class Settings(BaseModel):
     calibration: CalibrationSettings
     drowsiness: DrowsinessSettings
     distraction: DistractionSettings
-    objects: SectionSettings
-    emotion: SectionSettings
+    objects: ObjectsSettings
+    emotion: EmotionSettings
     risk: SectionSettings
     alerts: SectionSettings
     logging: LoggingSettings
