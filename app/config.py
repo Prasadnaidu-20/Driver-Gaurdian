@@ -30,6 +30,7 @@ class StreamSettings(BaseModel):
     frame_width: int
     frame_height: int
     jpeg_quality: float
+    perf_window_frames: int
 
 
 class CalibrationSettings(BaseModel):

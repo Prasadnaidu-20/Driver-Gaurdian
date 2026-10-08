@@ -7,7 +7,8 @@ import logging
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.config import PROJECT_ROOT, get_settings
+from app.api.ws import router as ws_router
+from app.config import PROJECT_ROOT, StreamSettings, get_settings
 
 settings = get_settings()
 logging.basicConfig(
@@ -23,6 +24,15 @@ app = FastAPI(title="DriveGuardian")
 def health() -> dict[str, str]:
     """Liveness check."""
     return {"status": "ok"}
+
+
+@app.get("/api/config")
+def client_config() -> StreamSettings:
+    """Stream settings the browser needs (capture size, JPEG quality)."""
+    return settings.stream
+
+
+app.include_router(ws_router)
 
 
 # Mounted last so it does not shadow API routes.

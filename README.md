@@ -17,6 +17,7 @@ uvicorn app.main:app --reload
 ```
 
 Open http://localhost:8000 (health check: http://localhost:8000/health).
+Click **Start webcam** or **Load video file**. Frames stream to the backend over `/ws/stream`, and the Performance card shows stream/backend FPS, client round-trip latency and backend processing latency.
 
 ## Test
 

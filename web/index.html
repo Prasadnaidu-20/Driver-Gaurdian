@@ -7,8 +7,49 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <h1>DriveGuardian</h1>
-  <p>Real-time driver monitoring. Dashboard coming in Phase 1.</p>
+  <header class="topbar">
+    <h1>DriveGuardian</h1>
+    <div class="controls">
+      <button id="btn-webcam" type="button">Start webcam</button>
+      <label class="file-btn">
+        Load video file
+        <input id="file-input" type="file" accept="video/*">
+      </label>
+      <button id="btn-stop" type="button" disabled>Stop</button>
+    </div>
+    <span id="status" class="status">Idle</span>
+  </header>
+
+  <main class="layout">
+    <section class="video-pane">
+      <div class="video-wrap">
+        <video id="video" playsinline muted></video>
+        <canvas id="overlay" class="overlay"></canvas>
+        <div id="video-placeholder" class="video-placeholder">Start the webcam or load a video file</div>
+      </div>
+    </section>
+
+    <aside class="side-panel">
+      <div class="card">
+        <h2>Performance</h2>
+        <dl class="metrics">
+          <dt>Stream/backend FPS</dt><dd id="m-fps">–</dd>
+          <dt>Round-trip latency (client) p50 / p95</dt><dd id="m-rtt">–</dd>
+          <dt>Backend processing latency (now)</dt><dd id="m-backend">–</dd>
+          <dt>Backend processing latency p50 / p95</dt><dd id="m-backend-pct">–</dd>
+          <dt>Frames processed</dt><dd id="m-frames">0</dd>
+          <dt>Last status</dt><dd id="m-status">–</dd>
+        </dl>
+      </div>
+      <div class="card placeholder"><h2>Driver State</h2><p>Phase 2</p></div>
+      <div class="card placeholder"><h2>Drowsiness</h2><p>Phase 3</p></div>
+      <div class="card placeholder"><h2>Distraction</h2><p>Phase 3</p></div>
+      <div class="card placeholder"><h2>Emotion</h2><p>Phase 4</p></div>
+      <div class="card placeholder"><h2>Risk</h2><p>Phase 5</p></div>
+      <div class="card placeholder"><h2>Alerts</h2><p>Phase 5</p></div>
+    </aside>
+  </main>
+
   <script src="app.js"></script>
 </body>
 </html>

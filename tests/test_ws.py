@@ -1,0 +1,90 @@
+import struct
+
+import cv2
+import numpy as np
+import pytest
+from fastapi.testclient import TestClient
+
+from app.api.ws import BadMessage, parse_frame_message
+from app.config import get_settings
+from app.main import app
+from app.pipeline.frame_processor import FrameProcessor
+
+
+def make_message(timestamp_ms: float, frame_id: int, payload: bytes) -> bytes:
+    return struct.pack("<dI", timestamp_ms, frame_id) + payload
+
+
+def make_jpeg(width: int = 640, height: int = 480) -> bytes:
+    img = np.zeros((height, width, 3), dtype=np.uint8)
+    cv2.rectangle(img, (100, 100), (300, 300), (0, 255, 0), -1)
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    assert ok
+    return buf.tobytes()
+
+
+def test_parse_frame_message_round_trip() -> None:
+    ts, fid, jpeg = parse_frame_message(make_message(1234.5, 42, b"abc"))
+    assert ts == 1234.5
+    assert fid == 42
+    assert jpeg == b"abc"
+
+
+def test_parse_frame_message_max_uint32() -> None:
+    _, fid, _ = parse_frame_message(make_message(0.0, 2**32 - 1, b""))
+    assert fid == 2**32 - 1
+
+
+def test_parse_frame_message_too_short() -> None:
+    with pytest.raises(BadMessage):
+        parse_frame_message(b"\x00" * 11)
+
+
+def test_frame_processor_is_transport_independent() -> None:
+    processor = FrameProcessor(get_settings())
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    assert processor.process(frame, 10.0, 1).status == "ok"
+    assert processor.process(None, 20.0, 2).status == "decode_error"
+
+
+def test_api_config_returns_stream_settings() -> None:
+    cfg = TestClient(app).get("/api/config").json()
+    assert cfg["frame_width"] == 640
+    assert cfg["frame_height"] == 480
+    assert cfg["jpeg_quality"] == 0.7
+    assert cfg["perf_window_frames"] >= 2
+
+
+def test_ws_round_trip_ok() -> None:
+    client = TestClient(app)
+    jpeg = make_jpeg()
+    with client.websocket_connect("/ws/stream") as ws:
+        for fid in range(3):  # one frame in flight: send, wait for result, repeat
+            ws.send_bytes(make_message(1000.0 + fid * 33.3, fid, jpeg))
+            result = ws.receive_json()
+            assert result["frame_id"] == fid
+            assert result["timestamp_ms"] == pytest.approx(1000.0 + fid * 33.3)
+            assert result["status"] == "ok"
+            assert result["perf"]["backend_ms"] > 0
+            assert set(result["perf"]) == {"backend_ms", "backend_p50_ms", "backend_p95_ms", "fps"}
+        assert result["perf"]["fps"] > 0
+
+
+def test_ws_bad_input_keeps_socket_alive() -> None:
+    client = TestClient(app)
+    with client.websocket_connect("/ws/stream") as ws:
+        ws.send_bytes(make_message(5.0, 7, b"not a jpeg"))
+        result = ws.receive_json()
+        assert result["status"] == "decode_error"
+        assert result["frame_id"] == 7
+
+        ws.send_bytes(b"\x01\x02")
+        assert ws.receive_json()["status"] == "bad_message"
+
+        ws.send_text("hello")
+        assert ws.receive_json()["status"] == "bad_message"
+
+        ws.send_bytes(make_message(6.0, 8, make_jpeg()))
+        result = ws.receive_json()
+        assert result["status"] == "ok"
+        assert result["frame_id"] == 8

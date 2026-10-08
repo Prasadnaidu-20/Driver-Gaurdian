@@ -10,6 +10,7 @@ stream:
   frame_width: 640       # width (px) frames are resized to in the browser before sending
   frame_height: 480      # height (px) frames are resized to in the browser before sending
   jpeg_quality: 0.7      # browser JPEG encode quality (0-1)
+  perf_window_frames: 60 # rolling window (frames) for stream FPS and latency p50/p95
 
 face:                    # placeholder — Phase 2 (MediaPipe Face Landmarker)
   enabled: false         # face analysis not implemented yet
