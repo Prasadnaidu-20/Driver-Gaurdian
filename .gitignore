@@ -1,0 +1,14 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Model weights (downloaded by scripts/download_models.py)
+models_store/*
+!models_store/.gitkeep
+
+# Datasets, run outputs, live session logs
+data/
+experiments/*/
+sessions/

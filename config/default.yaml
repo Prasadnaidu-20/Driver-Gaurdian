@@ -1,0 +1,41 @@
+# DriveGuardian default configuration.
+# ALL thresholds, weights, windows, frame-skip values and model paths live here.
+# Sections marked "placeholder" are filled in by the phase that implements them.
+
+server:
+  host: 127.0.0.1        # bind address for uvicorn
+  port: 8000             # HTTP / WebSocket port
+
+stream:
+  frame_width: 640       # width (px) frames are resized to in the browser before sending
+  frame_height: 480      # height (px) frames are resized to in the browser before sending
+  jpeg_quality: 0.7      # browser JPEG encode quality (0-1)
+
+face:                    # placeholder — Phase 2 (MediaPipe Face Landmarker)
+  enabled: false         # face analysis not implemented yet
+
+calibration:             # Phase 3 — per-driver baseline
+  duration_s: 10         # seconds of "look at the road" baseline capture
+
+drowsiness:              # placeholder — Phase 3
+  enabled: false
+
+distraction:             # placeholder — Phase 3
+  enabled: false
+
+objects:                 # placeholder — Phase 4 (YOLO phone / cup / bottle)
+  enabled: false
+
+emotion:                 # placeholder — Phase 4 (context only, never raises risk above Low alone)
+  enabled: false
+
+risk:                    # placeholder — Phase 5 (fusion weights, levels, hysteresis)
+  enabled: false
+
+alerts:                  # placeholder — Phase 5
+  enabled: false
+
+logging:
+  level: INFO            # Python logging level: DEBUG | INFO | WARNING | ERROR
+
+mode: rules              # estimator mode: rules | ml | hybrid
