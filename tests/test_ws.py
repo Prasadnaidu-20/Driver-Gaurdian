@@ -43,8 +43,9 @@ def test_parse_frame_message_too_short() -> None:
 def test_frame_processor_is_transport_independent() -> None:
     processor = FrameProcessor(get_settings())
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    assert processor.process(frame, 10.0, 1).status == "ok"
+    assert processor.process(frame, 10.0, 1).status in ("ok", "no_face")  # no_face if the model is present
     assert processor.process(None, 20.0, 2).status == "decode_error"
+    processor.close()
 
 
 def test_api_config_returns_stream_settings() -> None:
@@ -53,6 +54,7 @@ def test_api_config_returns_stream_settings() -> None:
     assert cfg["frame_height"] == 480
     assert cfg["jpeg_quality"] == 0.7
     assert cfg["perf_window_frames"] >= 2
+    assert cfg["chart_window_s"] > 0
 
 
 def test_ws_round_trip_ok() -> None:
@@ -64,7 +66,8 @@ def test_ws_round_trip_ok() -> None:
             result = ws.receive_json()
             assert result["frame_id"] == fid
             assert result["timestamp_ms"] == pytest.approx(1000.0 + fid * 33.3)
-            assert result["status"] == "ok"
+            assert result["status"] in ("ok", "no_face")  # synthetic frame has no face
+            assert {"available", "detected", "bbox", "features", "landmarks"} <= set(result["face"])
             assert result["perf"]["backend_ms"] > 0
             assert set(result["perf"]) == {"backend_ms", "backend_p50_ms", "backend_p95_ms", "fps"}
         assert result["perf"]["fps"] > 0
@@ -86,5 +89,5 @@ def test_ws_bad_input_keeps_socket_alive() -> None:
 
         ws.send_bytes(make_message(6.0, 8, make_jpeg()))
         result = ws.receive_json()
-        assert result["status"] == "ok"
+        assert result["status"] in ("ok", "no_face")
         assert result["frame_id"] == 8

@@ -1,4 +1,5 @@
-// DriveGuardian dashboard — Phase 1: stream frames to /ws/stream and show performance.
+// DriveGuardian dashboard — stream frames to /ws/stream; show performance (Phase 1)
+// and face landmarks / features with an EAR-MAR chart (Phase 2).
 //
 // Wire format (client → server), little-endian:
 //   float64 timestamp_ms | uint32 frame_id | JPEG bytes
@@ -22,6 +23,25 @@ const el = {
   backendPct: document.getElementById("m-backend-pct"),
   frames: document.getElementById("m-frames"),
   lastStatus: document.getElementById("m-status"),
+  showLandmarks: document.getElementById("toggle-landmarks"),
+  faceStatus: document.getElementById("face-status"),
+  earLR: document.getElementById("f-ear-lr"),
+  ear: document.getElementById("f-ear"),
+  mar: document.getElementById("f-mar"),
+  pose: document.getElementById("f-pose"),
+  gaze: document.getElementById("f-gaze"),
+  blink: document.getElementById("f-blink"),
+  jaw: document.getElementById("f-jaw"),
+  chartCanvas: document.getElementById("chart-ear-mar"),
+};
+
+const OVERLAY_COLORS = {
+  box: "#22c55e",
+  right_eye: "#38bdf8",
+  left_eye: "#38bdf8",
+  mouth: "#f472b6",
+  right_iris: "#facc15",
+  left_iris: "#facc15",
 };
 
 const state = {
@@ -38,6 +58,9 @@ const state = {
   sentAt: 0,             // performance.now() when the in-flight frame was sent
   rtts: [],              // rolling client round-trip latencies (ms)
   framesDone: 0,
+  chart: null,           // Chart.js instance (null if the CDN failed to load)
+  chartLastTs: null,     // last frame timestamp added to the chart (ms)
+  lastFace: null,        // last face block, redrawn when the landmark toggle changes
 };
 
 // ---------- helpers ----------
@@ -70,6 +93,139 @@ function resetMetrics() {
   state.framesDone = 0;
   for (const node of [el.fps, el.rtt, el.backend, el.backendPct, el.lastStatus]) node.textContent = "–";
   el.frames.textContent = "0";
+}
+
+// Draw the video into the w×h capture canvas keeping its aspect ratio (black bars).
+// The <video> and the overlay both use object-fit: contain in a 4:3 box, so the captured
+// frame, the displayed video and the overlay share the same geometry for any file.
+function drawLetterboxed(ctx, video, w, h) {
+  const vw = video.videoWidth || w;
+  const vh = video.videoHeight || h;
+  const scale = Math.min(w / vw, h / vh);
+  const dw = vw * scale;
+  const dh = vh * scale;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(video, (w - dw) / 2, (h - dh) / 2, dw, dh);
+}
+
+// ---------- face: overlay, Driver State card, chart ----------
+
+function clearOverlay() {
+  el.overlay.getContext("2d").clearRect(0, 0, el.overlay.width, el.overlay.height);
+}
+
+function drawOverlay(face) {
+  clearOverlay();
+  if (!face || !face.detected) return;
+  const ctx = el.overlay.getContext("2d");
+  const W = el.overlay.width;
+  const H = el.overlay.height;
+  if (face.bbox) {
+    const [x, y, bw, bh] = face.bbox;
+    ctx.strokeStyle = OVERLAY_COLORS.box;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x * W, y * H, bw * W, bh * H);
+  }
+  if (!el.showLandmarks.checked || !face.landmarks) return;
+  for (const [group, points] of Object.entries(face.landmarks)) {
+    ctx.fillStyle = OVERLAY_COLORS[group] || "#fff";
+    const r = group.endsWith("iris") ? 1.5 : 1.8;
+    for (const [px, py] of points) {
+      ctx.beginPath();
+      ctx.arc(px * W, py * H, r, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+  }
+}
+
+const FEATURE_NODES = () => [el.earLR, el.ear, el.mar, el.pose, el.gaze, el.blink, el.jaw];
+
+function setFaceStatus(text, cls) {
+  el.faceStatus.textContent = text;
+  el.faceStatus.className = `badge ${cls}`;
+}
+
+function resetDriverState() {
+  setFaceStatus("–", "");
+  for (const node of FEATURE_NODES()) node.textContent = "–";
+}
+
+function renderDriverState(result) {
+  const face = result.face;
+  if (!face || !face.available) {
+    setFaceStatus("model unavailable", "bad");
+    return;
+  }
+  if (!face.detected) {
+    setFaceStatus("no face", "warn");
+    for (const node of FEATURE_NODES()) node.textContent = "–";
+    return;
+  }
+  const f = face.features;
+  const n = (v, d = 3) => v.toFixed(d);
+  setFaceStatus("face detected", "ok");
+  el.earLR.textContent = `${n(f.ear_left)} / ${n(f.ear_right)}`;
+  el.ear.textContent = n(f.ear_mean);
+  el.mar.textContent = n(f.mar);
+  el.pose.textContent = `${n(f.yaw, 1)} / ${n(f.pitch, 1)} / ${n(f.roll, 1)}`;
+  el.gaze.textContent = `${n(f.gaze_h, 2)} / ${n(f.gaze_v, 2)}`;
+  el.blink.textContent = `${n(f.eye_blink_left, 2)} / ${n(f.eye_blink_right, 2)}`;
+  el.jaw.textContent = n(f.jaw_open, 2);
+}
+
+function initChart() {
+  if (typeof Chart === "undefined") {
+    console.warn("Chart.js not loaded (CDN unreachable?) — EAR/MAR chart disabled");
+    return;
+  }
+  const dataset = (label, color) => ({
+    label, data: [], borderColor: color, backgroundColor: color,
+    borderWidth: 1.5, pointRadius: 0, spanGaps: false,
+  });
+  const axisColor = "#8b96a1";
+  const gridColor = "#2a333d";
+  state.chart = new Chart(el.chartCanvas, {
+    type: "line",
+    data: { datasets: [dataset("EAR mean", "#38bdf8"), dataset("MAR", "#f472b6")] },
+    options: {
+      animation: false,
+      maintainAspectRatio: false,
+      parsing: false,
+      scales: {
+        x: { type: "linear", ticks: { color: axisColor, stepSize: 1, maxTicksLimit: 6, callback: (v) => `${Number(v).toFixed(0)} s` },
+             grid: { color: gridColor } },
+        y: { min: 0, suggestedMax: 0.6, ticks: { color: axisColor }, grid: { color: gridColor } },
+      },
+      plugins: { legend: { labels: { color: "#e6e9ec", boxWidth: 12 } }, tooltip: { enabled: false } },
+    },
+  });
+}
+
+function resetChart() {
+  state.chartLastTs = null;
+  if (!state.chart) return;
+  for (const ds of state.chart.data.datasets) ds.data = [];
+  state.chart.update("none");
+}
+
+function updateChart(result) {
+  if (!state.chart) return;
+  const ts = result.timestamp_ms;
+  if (state.chartLastTs !== null && ts < state.chartLastTs) resetChart();  // video seek / replay
+  state.chartLastTs = ts;
+  const x = ts / 1000;
+  const f = result.face && result.face.detected ? result.face.features : null;
+  const [earDs, marDs] = state.chart.data.datasets;
+  earDs.data.push({ x, y: f ? f.ear_mean : null });  // null leaves a gap while there is no face
+  marDs.data.push({ x, y: f ? f.mar : null });
+  const minX = x - state.config.chart_window_s;
+  for (const ds of state.chart.data.datasets) {
+    while (ds.data.length && ds.data[0].x < minX) ds.data.shift();
+  }
+  state.chart.options.scales.x.min = minX;
+  state.chart.options.scales.x.max = x;
+  state.chart.update("none");
 }
 
 // ---------- WebSocket ----------
@@ -142,7 +298,7 @@ function sendFrame() {
   state.frameId = (state.frameId + 1) >>> 0;  // uint32 wrap
 
   const { frame_width: w, frame_height: h, jpeg_quality: q } = state.config;
-  state.capture.getContext("2d").drawImage(el.video, 0, 0, w, h);
+  drawLetterboxed(state.capture.getContext("2d"), el.video, w, h);
   state.capture.toBlob(async (blob) => {
     const ws = state.ws;
     if (!blob || !ws || ws.readyState !== WebSocket.OPEN || !state.streaming) {
@@ -181,6 +337,13 @@ function onResult(result) {
   el.frames.textContent = String(state.framesDone);
   el.lastStatus.textContent = result.status;
 
+  if (result.status !== "bad_message" && result.status !== "decode_error") {
+    state.lastFace = result.face;
+    drawOverlay(result.face);
+    renderDriverState(result);
+    updateChart(result);
+  }
+
   scheduleNext();
 }
 
@@ -203,6 +366,8 @@ function stop(message = "Stopped") {
   }
   state.source = null;
   state.inFlight = false;
+  state.lastFace = null;
+  clearOverlay();
   el.placeholder.hidden = false;
   setStatus(message);
   setButtons();
@@ -213,6 +378,8 @@ function beginStreaming(source) {
   state.streaming = true;
   state.frameId = 0;
   resetMetrics();
+  resetDriverState();
+  resetChart();
   el.placeholder.hidden = true;
   setButtons();
   openSocket();
@@ -268,6 +435,8 @@ el.video.addEventListener("ended", () => {
   setStatus("Video ended");
 });
 
+el.showLandmarks.addEventListener("change", () => drawOverlay(state.lastFace));
+
 window.addEventListener("pagehide", () => closeSocket());
 
 async function init() {
@@ -285,6 +454,7 @@ async function init() {
   state.capture.height = h;
   el.overlay.width = w;
   el.overlay.height = h;
+  initChart();
   setButtons();
   setStatus("Idle");
 }

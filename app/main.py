@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.api.ws import router as ws_router
-from app.config import PROJECT_ROOT, StreamSettings, get_settings
+from app.config import PROJECT_ROOT, get_settings
 
 settings = get_settings()
 logging.basicConfig(
@@ -27,9 +28,9 @@ def health() -> dict[str, str]:
 
 
 @app.get("/api/config")
-def client_config() -> StreamSettings:
-    """Stream settings the browser needs (capture size, JPEG quality)."""
-    return settings.stream
+def client_config() -> dict[str, Any]:
+    """Settings the browser needs: stream fields (capture size, JPEG quality) plus UI settings."""
+    return {**settings.stream.model_dump(), **settings.ui.model_dump()}
 
 
 app.include_router(ws_router)

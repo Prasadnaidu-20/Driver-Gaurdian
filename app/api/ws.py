@@ -88,3 +88,5 @@ async def stream(websocket: WebSocket) -> None:
             await websocket.send_json(result.model_dump())
     except WebSocketDisconnect:
         logger.info("Stream disconnected: %s (%d frames in window)", websocket.client, len(perf))
+    finally:
+        await run_in_threadpool(processor.close)

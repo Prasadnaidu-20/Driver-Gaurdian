@@ -12,8 +12,21 @@ stream:
   jpeg_quality: 0.7      # browser JPEG encode quality (0-1)
   perf_window_frames: 60 # rolling window (frames) for stream FPS and latency p50/p95
 
-face:                    # placeholder — Phase 2 (MediaPipe Face Landmarker)
-  enabled: false         # face analysis not implemented yet
+face:                    # Phase 2 — MediaPipe Face Landmarker + geometric features
+  enabled: true          # run face analysis in the pipeline
+  model_path: models_store/face_landmarker.task   # relative to project root
+  model_url: https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task  # used by scripts/download_models.py
+  num_faces: 1           # driver only
+  min_detection_confidence: 0.5  # MediaPipe face detection confidence
+  min_presence_confidence: 0.5   # MediaPipe face presence confidence
+  min_tracking_confidence: 0.5   # MediaPipe landmark tracking confidence
+  timestamp_reset_ms: 1000  # backward timestamp jump > this recreates the landmarker; smaller non-increase is nudged to last+1 ms
+  send_landmarks: true   # include eye/mouth/iris points in FrameResult for the overlay
+  crop_size: 224         # crop_face output side (px), used by emotion (Phase 4) and training
+  crop_margin: 0.25      # extra margin around the face bbox, fraction of the bbox side
+
+ui:
+  chart_window_s: 10     # rolling window (s) of the EAR/MAR chart
 
 calibration:             # Phase 3 — per-driver baseline
   duration_s: 10         # seconds of "look at the road" baseline capture

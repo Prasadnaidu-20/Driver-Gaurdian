@@ -52,3 +52,70 @@ Open http://localhost:8000. Webcam access needs `localhost`/`127.0.0.1` or HTTPS
 - Video-file timestamps go backwards on seek or replay. That's harmless now; Phase 2 (MediaPipe VIDEO mode) has to guard against non-increasing timestamps, as PHASES.md already notes.
 - After a video ends, the stream closes. Load the file again to restream it (pressing play on an ended video won't restart streaming).
 - `fastapi.testclient` prints a Starlette deprecation warning about `httpx` (tests still pass).
+
+---
+
+## Phase 2 — Face landmarks and geometric features
+
+### What was built
+- **Dependency:** `mediapipe>=0.10.14` (installed: 1.1.0 on Python 3.12.8).
+- `scripts/download_models.py`: downloads `face_landmarker.task` (3.8 MB) into `models_store/`, using the URL and path from config. It skips the download if the file exists (`--force` re-downloads) and writes via a `.part` file. Phase 4 adds its weights to `model_specs()`.
+- `config/default.yaml`: `face:` is now typed (`FaceSettings`): model path/URL, confidences, `timestamp_reset_ms`, `send_landmarks`, `crop_size`, `crop_margin`. There is a new `ui:` section with `chart_window_s: 10`.
+- `app/pipeline/face.py`:
+  - `FaceAnalyzer` runs the Face Landmarker in VIDEO mode with `num_faces=1`, blendshapes and transformation matrices, one instance per WebSocket connection. `FrameProcessor.close()` releases it when the socket closes.
+  - **Timestamp guard** (`MonotonicClock`): MediaPipe needs strictly increasing integer ms. A duplicate or slightly backward timestamp (≤ `timestamp_reset_ms`) is nudged to `last + 1`. A larger backward jump (video seek or replay) **recreates the landmarker**. The client timestamp is still the one echoed and used for all temporal logic.
+  - A missing or broken model gives `face.available = false` and is logged once. An exception on a frame is reported as no face. The stream never crashes.
+- `app/pipeline/features.py` (pure NumPy):
+  - EAR left/right/mean (6-point) and MAR (8-point inner lip), computed in pixel space.
+  - Head pose yaw/pitch/roll from the transformation matrix.
+  - Gaze h/v iris ratios averaged over both eyes.
+  - Blendshapes `eyeBlinkLeft`, `eyeBlinkRight`, `jawOpen`.
+  - Normalized bbox.
+  - Overlay point groups (eye contours, mouth, irises; 82 points, about 1.2 KB JSON).
+- **Sign conventions** (documented in the `features.py` docstring; each sign is a `*_SIGN` constant, so a flip is a one-line fix):
+  - yaw + = driver turns head to **their left**;
+  - pitch + = **up** (looking down is negative, as Phase 3 assumes);
+  - roll + = head tilts to the driver's **left** shoulder;
+  - gaze_h 0 = image-left eye corner, 1 = image-right; gaze_v 0 = upper lid, 1 = lower lid; about 0.5/0.5 when centred.
+  - Eye "left/right" = the driver's anatomical side (in an unmirrored image the driver's right eye is on the image left).
+- `app/pipeline/preprocess.py`: `crop_face(frame_bgr, landmarks, size, margin)` gives a square RGB crop centred on the landmark bbox, black-padded at frame edges. It is not used live yet.
+- `app/schemas.py`: `FrameStatus` gains `no_face`. `FrameResult.face = FaceBlock{available, detected, bbox [x,y,w,h] normalized, features dict, landmarks groups}`.
+  - Status rules: `decode_error` if the JPEG is bad; `no_face` if analysis ran and found no face; otherwise `ok`. If the model is unavailable or disabled, the status is `ok` with `face.available=false`.
+- Dashboard:
+  - "Show landmarks" toggle; the overlay draws the face box (always) and eye/mouth/iris points.
+  - Driver State card with a status badge (face detected / no face / model unavailable) and all live numbers.
+  - Rolling 10 s Chart.js (CDN) line chart of EAR mean and MAR, with gaps while there is no face; it resets on a seek or a new stream.
+
+### Measured (automated, no browser)
+- Scripted WebSocket client against live uvicorn, 640×480 frames containing a face (MediaPipe sample portrait): **backend p50 21.1 ms / p95 24.2 ms**, client round trip p50 28.5 ms, stream FPS ≈ 27. That is the pipeline-bound ceiling with one frame in flight.
+- On a frontal, smiling portrait: EAR ≈ 0.22, MAR ≈ 0.27 (teeth showing), jawOpen 0.11, eyeBlink ≈ 0.2, gaze ≈ 0.51/0.48, yaw/pitch/roll ≈ 1.5/−5.3/−0.7°.
+- Same run: 200 face frames, a duplicate timestamp, a 50 ms backward step, 20 blank frames (→ `no_face`), then a seek back to 0 (→ landmarker recreated). No errors.
+- Raw roll sign verified on in-plane rotated images (±20° → ±20° raw). Yaw and pitch signs follow from the same confirmed axis frame (x right, y up, z toward camera, translation z < 0). **Confirm live with manual test 2.**
+
+### How to run
+```powershell
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python scripts/download_models.py
+uvicorn app.main:app --reload
+```
+
+### How to test
+`pytest -q` (39 tests):
+- `test_features.py`: EAR/MAR known values, closed eye/mouth, scale invariance, degenerate points; rotation → Euler for identity, pure yaw/pitch/roll with signs, combined round trips with translation ignored; gaze centred and shifted; bbox clipping; feature keys.
+- `test_preprocess.py`: shape, dtype, RGB order, edge padding, face partly outside the frame.
+- `test_face.py`: `MonotonicClock` cases; a missing model gives `available=false` with no crash; with the real model, blank frames give `no_face` across duplicate, small and large backward timestamps (skipped if the model isn't downloaded).
+- `test_ws.py`: updated for the `face` block, `no_face` and `chart_window_s`.
+
+### Deviations from the spec / decisions
+- **Letterboxed capture:** Phase 1 stretched every source into 640×480. For 16:9 files that distorts EAR/MAR and misaligns the overlay with the letterboxed `<video>`. The browser now letterboxes into the capture canvas (black bars). Webcam at 4:3 is unchanged.
+- **Status when the model is unavailable** is `ok` with `face.available=false` rather than a new status value, because "unavailable" is per component (CLAUDE.md).
+- **Landmark indices** are named constants in `features.py`, not config: they are fixed mesh topology, not tunable thresholds.
+- **New `ui` config section**; `/api/config` now also returns `chart_window_s`, flat alongside the stream fields.
+- **`crop_face` takes `size`/`margin` as arguments** (from `face.crop_size` / `face.crop_margin`), so `training/` can use it without importing `app.config`.
+
+### Known issues / notes
+- Blendshape left/right naming is MediaPipe's own. Check with a wink whether `eyeBlinkLeft` matches `ear_left` (the driver's left eye). If it's swapped, note it; Phase 3 uses the mean anyway.
+- Creating the landmarker costs a few hundred ms at stream start and on every large backward seek.
+- MediaPipe prints a few C++ `W0000`/`INFO` lines to stderr at startup; these are harmless.
+- Chart.js comes from a CDN. Offline, the chart is disabled with a console warning and everything else works.

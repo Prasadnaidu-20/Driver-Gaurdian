@@ -16,6 +16,7 @@
         <input id="file-input" type="file" accept="video/*">
       </label>
       <button id="btn-stop" type="button" disabled>Stop</button>
+      <label class="toggle"><input id="toggle-landmarks" type="checkbox" checked> Show landmarks</label>
     </div>
     <span id="status" class="status">Idle</span>
   </header>
@@ -41,7 +42,20 @@
           <dt>Last status</dt><dd id="m-status">–</dd>
         </dl>
       </div>
-      <div class="card placeholder"><h2>Driver State</h2><p>Phase 2</p></div>
+      <div class="card">
+        <h2>Driver State <span id="face-status" class="badge">–</span></h2>
+        <dl class="metrics">
+          <dt>EAR left / right</dt><dd id="f-ear-lr">–</dd>
+          <dt>EAR mean</dt><dd id="f-ear">–</dd>
+          <dt>MAR</dt><dd id="f-mar">–</dd>
+          <dt>Yaw / pitch / roll (°)</dt><dd id="f-pose">–</dd>
+          <dt>Gaze h / v</dt><dd id="f-gaze">–</dd>
+          <dt>eyeBlink left / right</dt><dd id="f-blink">–</dd>
+          <dt>jawOpen</dt><dd id="f-jaw">–</dd>
+        </dl>
+        <p class="hint">Yaw + = driver turns left · pitch + = up · roll + = tilt to driver's left. Gaze h: 0 = image left, 1 = image right; v: 0 = up, 1 = down.</p>
+        <div class="chart-wrap"><canvas id="chart-ear-mar"></canvas></div>
+      </div>
       <div class="card placeholder"><h2>Drowsiness</h2><p>Phase 3</p></div>
       <div class="card placeholder"><h2>Distraction</h2><p>Phase 3</p></div>
       <div class="card placeholder"><h2>Emotion</h2><p>Phase 4</p></div>
@@ -50,6 +64,7 @@
     </aside>
   </main>
 
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

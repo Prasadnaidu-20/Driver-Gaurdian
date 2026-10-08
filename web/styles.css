@@ -111,3 +111,22 @@ button:disabled { opacity: 0.4; cursor: default; }
 
 .metrics dt { color: var(--muted); }
 .metrics dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+.toggle { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--muted); cursor: pointer; }
+
+.badge {
+  float: right;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--border);
+  color: var(--muted);
+}
+.badge.ok { background: #14532d; color: #bbf7d0; }
+.badge.warn { background: #713f12; color: #fde68a; }
+.badge.bad { background: #7f1d1d; color: #fecaca; }
+
+.hint { margin: 8px 0 0; font-size: 0.75rem; color: var(--muted); }
+
+.chart-wrap { position: relative; height: 160px; margin-top: 10px; }

@@ -7,3 +7,4 @@ pyyaml>=6.0
 psutil>=5.9
 pytest>=8.0
 httpx>=0.27  # required by fastapi.testclient.TestClient
+mediapipe>=0.10.14  # Face Landmarker (Tasks API); supports Python 3.9-3.12

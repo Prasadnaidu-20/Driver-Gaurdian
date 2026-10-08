@@ -8,6 +8,7 @@ Real-time driver monitoring web app: the browser streams webcam/video frames to 
 py -3.12 -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+python scripts/download_models.py   # MediaPipe face_landmarker.task -> models_store/
 ```
 
 ## Run

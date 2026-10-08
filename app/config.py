@@ -33,6 +33,29 @@ class StreamSettings(BaseModel):
     perf_window_frames: int
 
 
+class FaceSettings(BaseModel):
+    enabled: bool
+    model_path: str
+    model_url: str
+    num_faces: int
+    min_detection_confidence: float
+    min_presence_confidence: float
+    min_tracking_confidence: float
+    timestamp_reset_ms: float
+    send_landmarks: bool
+    crop_size: int
+    crop_margin: float
+
+    def resolved_model_path(self) -> Path:
+        """Model path as an absolute path (relative paths are relative to the project root)."""
+        path = Path(self.model_path)
+        return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+class UISettings(BaseModel):
+    chart_window_s: float
+
+
 class CalibrationSettings(BaseModel):
     duration_s: float
 
@@ -48,7 +71,8 @@ class Settings(BaseModel):
 
     server: ServerSettings
     stream: StreamSettings
-    face: SectionSettings
+    face: FaceSettings
+    ui: UISettings
     calibration: CalibrationSettings
     drowsiness: SectionSettings
     distraction: SectionSettings
