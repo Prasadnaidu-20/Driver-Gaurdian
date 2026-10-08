@@ -1,13 +1,17 @@
 // DriveGuardian dashboard — stream frames to /ws/stream; show performance (Phase 1)
-// and face landmarks / features with an EAR-MAR chart (Phase 2).
+// and face landmarks / features with an EAR-MAR chart (Phase 2); calibration and the
+// Drowsiness / Distraction cards (Phase 3).
 //
 // Wire format (client → server), little-endian:
 //   float64 timestamp_ms | uint32 frame_id | JPEG bytes
 // Flow control: exactly one frame in flight. The next frame is captured only after the
 // result for the previous one has arrived, so latency never builds up.
+// Control commands are JSON text messages ({"type": "calibrate" | "clear_calibration" |
+// "set_baseline"}); the server does not reply to them, so they don't disturb flow control.
 "use strict";
 
 const HEADER_BYTES = 12;
+const BASELINE_KEY = "driveguardian.baseline";  // localStorage: last webcam calibration
 
 const el = {
   video: document.getElementById("video"),
@@ -33,6 +37,30 @@ const el = {
   blink: document.getElementById("f-blink"),
   jaw: document.getElementById("f-jaw"),
   chartCanvas: document.getElementById("chart-ear-mar"),
+  btnCalibrate: document.getElementById("btn-calibrate"),
+  btnCalibClear: document.getElementById("btn-calib-clear"),
+  calibStatus: document.getElementById("calib-status"),
+  calibMessage: document.getElementById("calib-message"),
+  calibBaseline: document.getElementById("calib-baseline"),
+  calibBanner: document.getElementById("calib-banner"),
+  calibCountdown: document.getElementById("calib-countdown"),
+  calibBar: document.getElementById("calib-bar"),
+};
+
+const TASKS = ["drowsiness", "distraction"];
+const taskEl = Object.fromEntries(TASKS.map((key) => [key, {
+  label: document.getElementById(`${key}-label`),
+  bar: document.getElementById(`${key}-bar`),
+  score: document.getElementById(`${key}-score`),
+  reasons: document.getElementById(`${key}-reasons`),
+  details: document.getElementById(`${key}-details`),
+}]));
+
+// Label → severity class (badge and score bar colour).
+const LABEL_CLASS = {
+  alert: "ok", attentive: "ok",
+  slightly_drowsy: "warn", looking_away: "warn",
+  drowsy: "bad", distracted: "bad",
 };
 
 const OVERLAY_COLORS = {
@@ -61,6 +89,7 @@ const state = {
   chart: null,           // Chart.js instance (null if the CDN failed to load)
   chartLastTs: null,     // last frame timestamp added to the chart (ms)
   lastFace: null,        // last face block, redrawn when the landmark toggle changes
+  calibState: null,      // last calibration state from the server
 };
 
 // ---------- helpers ----------
@@ -86,6 +115,9 @@ function setButtons() {
   const active = state.source !== null;
   el.btnStop.disabled = !active;
   el.btnWebcam.disabled = state.config === null;
+  const connected = state.ws !== null && state.ws.readyState === WebSocket.OPEN;
+  el.btnCalibrate.disabled = !connected;
+  el.btnCalibClear.disabled = !connected;
 }
 
 function resetMetrics() {
@@ -228,6 +260,106 @@ function updateChart(result) {
   state.chart.update("none");
 }
 
+// ---------- calibration ----------
+
+function sendCommand(command) {
+  const ws = state.ws;
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(command));
+}
+
+function loadStoredBaseline() {
+  try {
+    return JSON.parse(localStorage.getItem(BASELINE_KEY));
+  } catch (err) {
+    return null;
+  }
+}
+
+function resetCalibration() {
+  state.calibState = null;
+  el.calibStatus.textContent = "–";
+  el.calibStatus.className = "badge";
+  el.calibMessage.textContent = "";
+  el.calibBaseline.textContent = "";
+  el.calibBanner.hidden = true;
+  el.btnCalibrate.textContent = "Calibrate";
+}
+
+function renderCalibration(cal) {
+  const calibrating = cal.state === "calibrating";
+  el.calibBanner.hidden = !calibrating;
+  if (calibrating) {
+    el.calibStatus.textContent = `calibrating ${Math.ceil(cal.remaining_s)} s`;
+    el.calibStatus.className = "badge info";
+    el.calibCountdown.textContent = `${cal.remaining_s.toFixed(1)} s left`;
+    el.calibBar.style.width = `${(cal.progress * 100).toFixed(0)}%`;
+  } else if (cal.state === "calibrated") {
+    el.calibStatus.textContent = "calibrated";
+    el.calibStatus.className = "badge ok";
+  } else {
+    el.calibStatus.textContent = "uncalibrated";
+    el.calibStatus.className = "badge warn";
+  }
+  el.calibMessage.textContent = cal.message;
+  el.btnCalibrate.textContent = cal.state === "calibrated" ? "Recalibrate" : "Calibrate";
+  const b = cal.baseline;
+  if (b) {
+    el.calibBaseline.textContent =
+      `${b.calibrated ? "Baseline" : "Default baseline"}: EAR ${b.ear_open.toFixed(3)} · MAR ${b.mar_closed.toFixed(3)} · ` +
+      `yaw ${b.yaw.toFixed(1)}° · pitch ${b.pitch.toFixed(1)}° · gaze ${b.gaze_h.toFixed(2)}/${b.gaze_v.toFixed(2)}`;
+  }
+  // A fresh webcam calibration is remembered so Stop/Start or a page refresh keeps it.
+  if (state.calibState === "calibrating" && cal.state === "calibrated" && state.source === "webcam" && b) {
+    localStorage.setItem(BASELINE_KEY, JSON.stringify(b));
+  }
+  state.calibState = cal.state;
+}
+
+// ---------- Drowsiness / Distraction cards ----------
+
+function resetTasks() {
+  for (const key of TASKS) renderTask(key, null);
+}
+
+function renderTask(key, task) {
+  const t = taskEl[key];
+  t.reasons.replaceChildren();
+  if (!task) {
+    t.label.textContent = "–";
+    t.label.className = "badge";
+    t.bar.style.width = "0";
+    t.bar.className = "bar-fill";
+    t.score.textContent = "–";
+    t.details.textContent = "";
+    return;
+  }
+  const cls = LABEL_CLASS[task.label] || "";
+  t.label.textContent = task.label.replace("_", " ");
+  t.label.className = `badge ${cls}`;
+  t.bar.style.width = `${(task.score * 100).toFixed(0)}%`;
+  t.bar.className = `bar-fill ${cls}`;
+  t.score.textContent = task.score.toFixed(2);
+  for (const reason of task.reasons) {
+    const li = document.createElement("li");
+    li.textContent = reason;
+    t.reasons.append(li);
+  }
+  const d = task.details;
+  const pct = (v) => `${(v * 100).toFixed(0)}%`;
+  const deg = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(0)}°`;
+  if (key === "drowsiness" && "perclos" in d) {
+    t.details.textContent =
+      `PERCLOS ${pct(d.perclos)} · closed ${d.closed_s.toFixed(1)} s · blinks (60 s) ${d.blinks} · ` +
+      `mean blink ${d.mean_blink_ms.toFixed(0)} ms · yawns (5 min) ${d.yawns}`;
+  } else if (key === "distraction" && "off_road_s" in d) {
+    t.details.textContent =
+      `off road ${d.off_road_s.toFixed(1)} s · glances ${pct(d.glance_fraction)} of 10 s · ` +
+      `Δyaw ${deg(d.rel_yaw)} · Δpitch ${deg(d.rel_pitch)}`;
+  } else {
+    t.details.textContent = "";
+  }
+}
+
 // ---------- WebSocket ----------
 
 function openSocket() {
@@ -240,6 +372,10 @@ function openSocket() {
   ws.onopen = () => {
     if (state.ws !== ws) return;
     setStatus(`Streaming (${state.source})`);
+    // Restore the remembered webcam calibration. Video files may show another driver: start uncalibrated.
+    const stored = state.source === "webcam" ? loadStoredBaseline() : null;
+    if (stored) sendCommand({ type: "set_baseline", baseline: stored });
+    setButtons();
     scheduleNext();
   };
   ws.onmessage = (event) => {
@@ -255,6 +391,7 @@ function openSocket() {
     state.ws = null;
     state.streaming = false;
     state.inFlight = false;
+    setButtons();
     if (state.source !== null) setStatus("Disconnected from server");
   };
 }
@@ -342,6 +479,8 @@ function onResult(result) {
     drawOverlay(result.face);
     renderDriverState(result);
     updateChart(result);
+    renderCalibration(result.calibration);
+    for (const key of TASKS) renderTask(key, result[key]);
   }
 
   scheduleNext();
@@ -368,6 +507,7 @@ function stop(message = "Stopped") {
   state.inFlight = false;
   state.lastFace = null;
   clearOverlay();
+  el.calibBanner.hidden = true;
   el.placeholder.hidden = false;
   setStatus(message);
   setButtons();
@@ -380,6 +520,8 @@ function beginStreaming(source) {
   resetMetrics();
   resetDriverState();
   resetChart();
+  resetCalibration();
+  resetTasks();
   el.placeholder.hidden = true;
   setButtons();
   openSocket();
@@ -436,6 +578,12 @@ el.video.addEventListener("ended", () => {
 });
 
 el.showLandmarks.addEventListener("change", () => drawOverlay(state.lastFace));
+
+el.btnCalibrate.addEventListener("click", () => sendCommand({ type: "calibrate" }));
+el.btnCalibClear.addEventListener("click", () => {
+  if (state.source === "webcam") localStorage.removeItem(BASELINE_KEY);
+  sendCommand({ type: "clear_calibration" });
+});
 
 window.addEventListener("pagehide", () => closeSocket());
 

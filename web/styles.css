@@ -130,3 +130,38 @@ button:disabled { opacity: 0.4; cursor: default; }
 .hint { margin: 8px 0 0; font-size: 0.75rem; color: var(--muted); }
 
 .chart-wrap { position: relative; height: 160px; margin-top: 10px; }
+
+.badge.info { background: #1e3a8a; color: #bfdbfe; }
+
+.button-row { display: flex; gap: 8px; }
+
+.bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--border);
+  overflow: hidden;
+}
+.bar-fill { height: 100%; width: 0; background: var(--accent); transition: width 0.1s linear; }
+.bar-fill.ok { background: #22c55e; }
+.bar-fill.warn { background: #f59e0b; }
+.bar-fill.bad { background: #ef4444; }
+
+.score-line { margin-top: 4px; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.reasons { margin: 6px 0 0; padding-left: 18px; font-size: 0.85rem; min-height: 1.2em; }
+.reasons li { margin: 2px 0; }
+
+.calib-banner {
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  top: 8%;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: rgba(15, 20, 25, 0.85);
+  border: 1px solid var(--accent);
+  text-align: center;
+}
+.calib-banner[hidden] { display: none; }
+.calib-text { font-size: 1.1rem; font-weight: 600; }
+.calib-sub { margin: 4px 0 8px; color: var(--muted); font-variant-numeric: tabular-nums; }

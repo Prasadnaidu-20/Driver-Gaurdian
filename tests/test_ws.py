@@ -1,3 +1,4 @@
+import json
 import struct
 
 import cv2
@@ -91,3 +92,62 @@ def test_ws_bad_input_keeps_socket_alive() -> None:
         result = ws.receive_json()
         assert result["status"] in ("ok", "no_face")
         assert result["frame_id"] == 8
+
+
+def test_ws_result_has_calibration_and_task_blocks() -> None:
+    client = TestClient(app)
+    with client.websocket_connect("/ws/stream") as ws:
+        ws.send_bytes(make_message(0.0, 0, make_jpeg()))
+        result = ws.receive_json()
+    assert result["calibration"]["state"] == "uncalibrated"
+    assert result["calibration"]["baseline"]["calibrated"] is False
+    if result["face"]["available"]:  # model downloaded: blank frame → no face → unknown
+        assert result["drowsiness"]["label"] == "unknown"
+        assert result["distraction"]["label"] == "unknown"
+    else:
+        assert result["drowsiness"] is None and result["distraction"] is None
+
+
+def test_ws_control_commands() -> None:
+    client = TestClient(app)
+    jpeg = make_jpeg()
+    baseline = {"ear_open": 0.31, "mar_closed": 0.03, "yaw": 5.0, "pitch": -4.0, "gaze_h": 0.5, "gaze_v": 0.5}
+    with client.websocket_connect("/ws/stream") as ws:
+        # Valid commands get no reply: the next message received is the frame result.
+        ws.send_text(json.dumps({"type": "set_baseline", "baseline": baseline}))
+        ws.send_bytes(make_message(0.0, 1, jpeg))
+        result = ws.receive_json()
+        assert result["frame_id"] == 1
+        assert result["calibration"]["state"] == "calibrated"
+        assert result["calibration"]["baseline"]["yaw"] == 5.0
+
+        ws.send_text(json.dumps({"type": "clear_calibration"}))
+        ws.send_bytes(make_message(33.0, 2, jpeg))
+        assert ws.receive_json()["calibration"]["state"] == "uncalibrated"
+
+        ws.send_text(json.dumps({"type": "set_baseline", "baseline": {"ear_open": 0.3}}))
+        assert ws.receive_json()["status"] == "bad_message"  # invalid baseline
+        ws.send_text(json.dumps({"type": "dance"}))
+        assert ws.receive_json()["status"] == "bad_message"
+
+
+def test_ws_calibration_progress_on_frames() -> None:
+    client = TestClient(app)
+    jpeg = make_jpeg()
+    with client.websocket_connect("/ws/stream") as ws:
+        ws.send_bytes(make_message(0.0, 0, jpeg))
+        face_available = ws.receive_json()["face"]["available"]
+        if not face_available:
+            pytest.skip("face model not downloaded: calibration needs face analysis")
+        ws.send_text(json.dumps({"type": "calibrate"}))
+        for fid, ts in enumerate([100.0, 2100.0, 4100.0], start=1):
+            ws.send_bytes(make_message(ts, fid, jpeg))
+            cal = ws.receive_json()["calibration"]
+            assert cal["state"] == "calibrating"
+        assert cal["progress"] == pytest.approx(0.4)
+        assert "Look at the road" in cal["message"]
+        # Blank frames have no face, so after the full duration calibration fails cleanly.
+        ws.send_bytes(make_message(10_200.0, 9, jpeg))
+        cal = ws.receive_json()["calibration"]
+        assert cal["state"] == "uncalibrated"
+        assert cal["message"].startswith("Calibration failed")

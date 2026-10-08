@@ -119,3 +119,91 @@ uvicorn app.main:app --reload
 - Creating the landmarker costs a few hundred ms at stream start and on every large backward seek.
 - MediaPipe prints a few C++ `W0000`/`INFO` lines to stderr at startup; these are harmless.
 - Chart.js comes from a CDN. Offline, the chart is disabled with a console warning and everything else works.
+
+---
+
+## Phase 3 — Calibration + rule-based drowsiness and distraction
+
+### What was built
+- **Temporal utilities** (`app/temporal/`). All of them run on client frame timestamps and tolerate duplicate or backward timestamps.
+  - `window.py` `TimeWindow`: time-weighted sliding window. Each sample counts until the next one, capped at `max_dt_s`, so gaps don't count. `time_mean(min_span_s)` gives PERCLOS-style fractions.
+  - `ema.py` `EMA`: time-based, `alpha = 1 − exp(−dt/τ)`, so it behaves the same at any FPS.
+  - `hysteresis.py` `HysteresisStateMachine`: multi-level, with an enter/exit threshold per level. The level the score asks for must persist `min_enter_s` (going up) or `min_exit_s` (going down) before the state switches. Phase 5 can reuse it for risk levels.
+  - `episodes.py` `EpisodeTracker`: duration of a continuous condition (eyes closed, mouth open, off road). Dropouts shorter than `max_gap_s` don't split an episode.
+- **Estimator interface** (`app/estimators/base.py`):
+  - `TaskOutput{score, label, confidence, probabilities, reasons, details}`.
+  - `Estimator.update(features | None, timestamp_ms)`, plus `set_baseline` and `reset`.
+  - `app/estimators/__init__.py` `build_estimators()` picks implementations by `mode`. Only `rules` exists, so `ml`/`hybrid` log a warning and use rules.
+- **Calibration** (`app/pipeline/calibration.py`):
+  - `Baseline{ear_open, mar_closed, yaw, pitch, gaze_h, gaze_v, calibrated}` holds medians over `calibration.duration_s` (10 s) of **frame time**.
+  - Calibration fails, keeping the previous baseline, if the face was seen in < 60% of frames, the median EAR < 0.15 (eyes closed) or the median MAR > 0.30 (mouth open).
+  - When uncalibrated, the baseline is `calibration.defaults`.
+- **Drowsiness rules** (`drowsiness_rules.py`):
+  - Eye closed when `EAR < 0.7 × baseline EAR` or mean eyeBlink > 0.55.
+  - Closure episodes < 1.0 s are blinks (count and mean duration over 60 s, shown but not scored). Longer ones are long closures, with a component ramping 1.0 → 1.5 s.
+  - PERCLOS is taken over 60 s, with a denominator of at least 30 s.
+  - Yawn: MAR > `max(0.5, baseline MAR + 0.35)` for > 1.5 s, counted over 5 min.
+  - `score = clamp(max(closure, PERCLOS) + 0.4 × min(1, yawns/3))`, then EMA (τ 0.2 s), then hysteresis → `alert | slightly_drowsy | drowsy` (enter 0.3/0.6, exit 0.2/0.45, 0.3 s up, 2.0 s down).
+- **Distraction rules** (`distraction_rules.py`):
+  - Off road, relative to the baseline, when `|Δyaw| > 30°`, `Δpitch < −20°`, `Δpitch > 25°`, or gaze is more than 0.2 (h) / 0.25 (v) from the neutral gaze. Gaze is ignored while the eyes are closed.
+  - Continuous component: 0 below 2 s (glances), ramping to 1 at 3 s.
+  - Glance-fraction component: share of the last 10 s spent in short glances, from 0 at 30% to 1 at 70%.
+  - `score = max`, then EMA, then hysteresis → `attentive | looking_away | distracted` (0.3 s up, 1.5 s down).
+- **Pipeline** (`FrameProcessor`):
+  - Owns the `Calibrator` and the estimators.
+  - Exposes `start_calibration()`, `set_baseline(dict)` and `clear_calibration()`; the Phase 6 offline runner can call them directly.
+  - A backward timestamp jump > `face.timestamp_reset_ms` (seek/replay) resets the estimators and restarts a running calibration. The baseline is kept.
+  - No-face frames give the label `unknown` with reason "no face".
+- **Contract** (`FrameResult`): new `calibration{state, progress, remaining_s, message, baseline}` plus `drowsiness` and `distraction` (`TaskOutput`, or `null` if disabled or the face model is unavailable).
+- **WebSocket**: text messages are JSON control commands: `{"type":"calibrate"}`, `{"type":"clear_calibration"}`, `{"type":"set_baseline","baseline":{…}}`.
+  - Valid commands get **no reply**, so the one-frame-in-flight loop is unaffected.
+  - Invalid text still gets `bad_message`.
+- **Dashboard**:
+  - Calibration card with **Calibrate / Recalibrate**, **Use defaults**, a status badge (uncalibrated / calibrating N s / calibrated), the message (including failure reasons) and the baseline values.
+  - During calibration, a banner over the video reads "Look at the road, eyes open, mouth closed" with a countdown and progress bar.
+  - Drowsiness and Distraction cards each show a label badge, colour-coded score bar, score, reasons list and a details line (PERCLOS, closed s, blinks, mean blink ms, yawns / off-road s, glance %, Δyaw, Δpitch).
+  - The webcam baseline is saved in `localStorage` and re-sent when the socket opens, so Stop/Start and page refresh keep the calibration. Video files always start uncalibrated.
+
+### Measured (automated, no browser)
+Scripted WS client against live uvicorn with a real portrait:
+- `calibrate` → calibrated after 10 s of frame time. Baseline EAR 0.203, MAR 0.285 (smiling, teeth showing; close to the 0.30 sanity limit), yaw 1.9°, pitch −4.9°.
+- Output while still: `alert` / `attentive`.
+- 30 blank frames → `no_face` / `unknown`.
+- Backend p50 is unchanged (the estimators cost well under 1 ms).
+
+### How to run
+Same as Phase 2: `uvicorn app.main:app --reload` → http://localhost:8000, Start webcam, press **Calibrate**.
+
+### How to test
+`pytest -q` (79 tests). New:
+- `test_temporal.py`: window fractions, gaps, pruning; EMA time constant and FPS independence; episodes and dropouts; hysteresis delays, band and anti-flicker.
+- `test_calibration.py`: medians with blinks, completion by frame time, failure on no face, closed eyes or open mouth (keeping the previous baseline), restart on seek, baseline validation.
+- `test_drowsiness_rules.py`:
+  - 60 s of 150–300 ms blinks → always alert.
+  - A 2 s closure → drowsy with "eyes closed …", back to alert only after `min_exit_s`.
+  - A 0.9 s closure → alert.
+  - 3 yawns → count 3 and slightly_drowsy; 1 s mouth openings → no yawn.
+  - High PERCLOS → drowsy.
+  - The calibrated EAR threshold, look-down suppression, no face, duplicate timestamps, reset.
+- `test_distraction_rules.py`:
+  - A 1 s glance → attentive; a glance at stream start → attentive.
+  - A 4 s look-down → distracted, then back to attentive.
+  - Frequent 1.5 s glances → raised fraction.
+  - Camera offset absorbed by calibration; cone boundaries and gaze; no face.
+- `test_ws.py`: new blocks, control commands (no reply; invalid → `bad_message`), calibration progress and clean failure on blank frames.
+
+### Deviations from the spec / decisions
+- **Looking down vs. eye closure:** looking down lowers EAR with the eyes open. When `Δpitch < −15°` (`ear_ignore_pitch_down_deg`), eye closure uses only the eyeBlink blendshape. Weakness: a drowsy head-nod then relies on the blendshape alone.
+- **Gaze range is relative to a calibrated neutral gaze** (`gaze_h`/`gaze_v` are added to the baseline), so camera offset is absorbed as it is for head pose.
+- **Yawn threshold** = `max(absolute 0.5, closed-mouth baseline + 0.35)`, so the calibrated MAR is used.
+- **Hysteresis has separate escalate/de-escalate durations** (`min_enter_s`, `min_exit_s`) instead of the single "minimum duration" in the spec. This is what gives "returns after the exit delay".
+- **Distraction fraction counts only glance time** (off-road time while the episode is still < 2 s). If all off-road time were counted, one 4 s look-down would keep the 10 s fraction at 40% and hold `looking_away` for ~6 s after the driver looked back. Long episodes are already scored by the continuous component.
+- **Rule estimators return empty `probabilities`**: there are no calibrated probabilities until the ML model (Phase 8). `confidence` is the share of the estimator's window covered by face frames.
+- **`TaskOutput.details`** is an additive field holding numeric stats for the cards and later session logging.
+- **Calibration persistence** in browser `localStorage` (webcam only).
+
+### Known issues / notes
+- Distraction is `unknown` when the face is lost. A head turned so far that MediaPipe loses the face is therefore not counted as off road; that belongs to Phase 5 fusion.
+- Thresholds are first guesses. Tune them in `config/default.yaml` after the manual tests (e.g. `closed_ratio`, `blink_threshold`, `yaw_limit_deg`).
+- Smiling with teeth during calibration gives a high closed-mouth MAR (≈0.28), which raises the yawn threshold. Calibrate with a neutral, closed mouth.
+- Yaw/pitch signs come from Phase 2. If manual test 4 shows "head turned right" while you turn left, flip `YAW_SIGN` in `features.py`.

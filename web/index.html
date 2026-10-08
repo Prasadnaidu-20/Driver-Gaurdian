@@ -27,6 +27,11 @@
         <video id="video" playsinline muted></video>
         <canvas id="overlay" class="overlay"></canvas>
         <div id="video-placeholder" class="video-placeholder">Start the webcam or load a video file</div>
+        <div id="calib-banner" class="calib-banner" hidden>
+          <div class="calib-text">Look at the road, eyes open, mouth closed</div>
+          <div class="calib-sub" id="calib-countdown">10 s</div>
+          <div class="bar"><div id="calib-bar" class="bar-fill"></div></div>
+        </div>
       </div>
     </section>
 
@@ -43,6 +48,15 @@
         </dl>
       </div>
       <div class="card">
+        <h2>Calibration <span id="calib-status" class="badge">–</span></h2>
+        <div class="button-row">
+          <button id="btn-calibrate" type="button" disabled>Calibrate</button>
+          <button id="btn-calib-clear" type="button" disabled>Use defaults</button>
+        </div>
+        <p id="calib-message" class="hint"></p>
+        <p id="calib-baseline" class="hint"></p>
+      </div>
+      <div class="card">
         <h2>Driver State <span id="face-status" class="badge">–</span></h2>
         <dl class="metrics">
           <dt>EAR left / right</dt><dd id="f-ear-lr">–</dd>
@@ -56,8 +70,20 @@
         <p class="hint">Yaw + = driver turns left · pitch + = up · roll + = tilt to driver's left. Gaze h: 0 = image left, 1 = image right; v: 0 = up, 1 = down.</p>
         <div class="chart-wrap"><canvas id="chart-ear-mar"></canvas></div>
       </div>
-      <div class="card placeholder"><h2>Drowsiness</h2><p>Phase 3</p></div>
-      <div class="card placeholder"><h2>Distraction</h2><p>Phase 3</p></div>
+      <div class="card">
+        <h2>Drowsiness <span id="drowsiness-label" class="badge">–</span></h2>
+        <div class="bar"><div id="drowsiness-bar" class="bar-fill"></div></div>
+        <div class="score-line">score <span id="drowsiness-score">–</span></div>
+        <ul id="drowsiness-reasons" class="reasons"></ul>
+        <p id="drowsiness-details" class="hint"></p>
+      </div>
+      <div class="card">
+        <h2>Distraction <span id="distraction-label" class="badge">–</span></h2>
+        <div class="bar"><div id="distraction-bar" class="bar-fill"></div></div>
+        <div class="score-line">score <span id="distraction-score">–</span></div>
+        <ul id="distraction-reasons" class="reasons"></ul>
+        <p id="distraction-details" class="hint"></p>
+      </div>
       <div class="card placeholder"><h2>Emotion</h2><p>Phase 4</p></div>
       <div class="card placeholder"><h2>Risk</h2><p>Phase 5</p></div>
       <div class="card placeholder"><h2>Alerts</h2><p>Phase 5</p></div>

@@ -3,10 +3,12 @@
 Wire format (client → server), one binary message per frame, little-endian:
     float64 timestamp_ms | uint32 frame_id | JPEG bytes
 The client keeps exactly one frame in flight, so frames are handled strictly in order.
+Text messages are JSON control commands (see `handle_command`); valid ones get no reply.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import struct
 import time
@@ -46,6 +48,30 @@ def decode_jpeg(jpeg: bytes) -> np.ndarray | None:
     return cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
 
 
+def handle_command(processor: FrameProcessor, text: str) -> bool:
+    """Apply a JSON control command. Returns False if the text is not a valid command.
+
+    Commands: {"type": "calibrate"}, {"type": "clear_calibration"},
+              {"type": "set_baseline", "baseline": {ear_open, mar_closed, yaw, pitch, gaze_h, gaze_v}}
+    """
+    try:
+        command = json.loads(text)
+        kind = command.get("type") if isinstance(command, dict) else None
+        if kind == "calibrate":
+            processor.start_calibration()
+        elif kind == "clear_calibration":
+            processor.clear_calibration()
+        elif kind == "set_baseline":
+            processor.set_baseline(command.get("baseline") or {})
+        else:
+            raise ValueError(f"unknown command type {kind!r}")
+    except ValueError as exc:  # includes json.JSONDecodeError
+        logger.warning("Bad control message: %s", exc)
+        return False
+    logger.info("Control command: %s", kind)
+    return True
+
+
 def _handle(processor: FrameProcessor, data: bytes) -> FrameResult:
     """Parse, decode and process one message (runs in a worker thread)."""
     try:
@@ -72,7 +98,11 @@ async def stream(websocket: WebSocket) -> None:
             message = await websocket.receive()
             if message["type"] == "websocket.disconnect":
                 raise WebSocketDisconnect(message.get("code", 1000))
-            data = message.get("bytes") or b""  # a text message is treated as a bad message
+            text = message.get("text")
+            # A valid control command gets no reply, so the client's one-frame-in-flight loop is unaffected.
+            if text is not None and handle_command(processor, text):
+                continue
+            data = message.get("bytes") or b""  # an invalid text message is answered as a bad message
             start = time.perf_counter()
             # Awaited one message at a time: the thread only keeps the event loop free.
             result = await run_in_threadpool(_handle, processor, data)

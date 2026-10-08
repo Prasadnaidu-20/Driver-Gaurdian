@@ -29,13 +29,67 @@ ui:
   chart_window_s: 10     # rolling window (s) of the EAR/MAR chart
 
 calibration:             # Phase 3 — per-driver baseline
-  duration_s: 10         # seconds of "look at the road" baseline capture
+  duration_s: 10         # seconds (frame time) of "look at the road, eyes open, mouth closed" capture
+  min_valid_fraction: 0.6  # calibration fails if a face was detected in fewer than this share of frames
+  min_open_ear: 0.15     # calibration fails if the median EAR is below this (eyes were not open)
+  max_closed_mar: 0.30   # calibration fails if the median MAR is above this (mouth was not closed)
+  defaults:              # baseline used when uncalibrated (skipped / cleared)
+    ear_open: 0.27       # typical open-eye EAR (MediaPipe 6-point)
+    mar_closed: 0.05     # typical closed-mouth MAR (inner lips)
+    yaw: 0.0             # neutral yaw (deg), camera assumed straight ahead
+    pitch: 0.0           # neutral pitch (deg)
+    gaze_h: 0.5          # neutral horizontal iris ratio
+    gaze_v: 0.5          # neutral vertical iris ratio
 
-drowsiness:              # placeholder — Phase 3
-  enabled: false
+drowsiness:              # Phase 3 — rule-based drowsiness
+  enabled: true
+  closed_ratio: 0.7      # eye closed when EAR < closed_ratio × baseline open-eye EAR
+  blink_threshold: 0.55  # ...or when mean eyeBlink blendshape > this
+  ear_ignore_pitch_down_deg: 15  # head pitched down more than this vs neutral → use only eyeBlink (EAR drops when looking down)
+  max_gap_s: 0.25        # dropouts (missed / no-face frames) shorter than this don't split a closure or yawn episode
+  max_dt_s: 0.5          # a single sample counts for at most this long in time-weighted windows
+  microsleep_s: 1.0      # closure longer than this is a long closure / microsleep (shorter = blink)
+  closure_full_s: 1.5    # closure component reaches 1.0 at this duration (ramps from microsleep_s)
+  perclos_window_s: 60   # PERCLOS window
+  perclos_min_span_s: 30 # PERCLOS denominator is at least this, so early closures don't read as huge PERCLOS
+  perclos_low: 0.15      # PERCLOS component is 0 at/below this
+  perclos_high: 0.40     # PERCLOS component is 1 at/above this
+  blink_window_s: 60     # window for blink rate / mean blink duration (display only)
+  yawn_mar_threshold: 0.5  # mouth "yawn-open" when MAR > max(this, baseline mar_closed + yawn_mar_margin)
+  yawn_mar_margin: 0.35  # calibrated margin above the closed-mouth MAR
+  yawn_min_s: 1.5        # mouth must stay open this long to count as a yawn (talking is shorter)
+  yawn_window_s: 300     # yawns are counted over this window (5 min)
+  yawn_count_full: 3     # yawn component reaches 1.0 at this many yawns in the window
+  yawn_weight: 0.4       # weight of the yawn component added to max(closure, PERCLOS)
+  score_ema_tau_s: 0.2   # EMA time constant of the score before hysteresis
+  levels: [alert, slightly_drowsy, drowsy]
+  enter: [0.0, 0.3, 0.6] # score needed to enter each level
+  exit: [0.0, 0.2, 0.45] # stay in a level until the score falls below this
+  min_enter_s: 0.3       # an escalation must persist this long before switching
+  min_exit_s: 2.0        # a de-escalation must persist this long before switching (exit delay)
 
-distraction:             # placeholder — Phase 3
-  enabled: false
+distraction:             # Phase 3 — rule-based distraction (eyes off road)
+  enabled: true
+  yaw_limit_deg: 30      # off road when |yaw − neutral| > this
+  pitch_down_limit_deg: 20  # off road when pitch − neutral < −this (looking down)
+  pitch_up_limit_deg: 25 # off road when pitch − neutral > this (looking up)
+  use_gaze: true         # also use iris gaze ratios
+  gaze_h_max_offset: 0.2 # off road when |gaze_h − neutral| > this
+  gaze_v_max_offset: 0.25  # off road when |gaze_v − neutral| > this
+  closed_ratio: 0.7      # gaze is ignored while EAR < closed_ratio × baseline (iris unreliable)
+  max_gap_s: 0.5         # dropouts shorter than this don't split an off-road episode
+  max_dt_s: 0.5          # a single sample counts for at most this long in the time-weighted window
+  glance_ignore_s: 2.0   # continuous off-road shorter than this is a glance and scores 0
+  glance_full_s: 3.0     # continuous component reaches 1.0 at this duration
+  window_s: 10           # window for the glance fraction (share of time spent in glances shorter than glance_ignore_s)
+  fraction_low: 0.3      # glance-fraction component is 0 at/below this
+  fraction_high: 0.7     # glance-fraction component is 1 at/above this
+  score_ema_tau_s: 0.2   # EMA time constant of the score before hysteresis
+  levels: [attentive, looking_away, distracted]
+  enter: [0.0, 0.3, 0.6]
+  exit: [0.0, 0.2, 0.45]
+  min_enter_s: 0.3
+  min_exit_s: 1.5
 
 objects:                 # placeholder — Phase 4 (YOLO phone / cup / bottle)
   enabled: false

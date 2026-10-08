@@ -6,6 +6,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.estimators.base import TaskOutput
+from app.pipeline.calibration import CalibrationState
+
 # ok: frame processed (face found, or face analysis unavailable/disabled — see face.available)
 # no_face: face analysis ran and found no face
 FrameStatus = Literal["ok", "no_face", "bad_message", "decode_error"]
@@ -30,11 +33,24 @@ class FaceBlock(BaseModel):
     landmarks: dict[str, list[list[float]]] | None = None     # overlay groups -> [[x, y], ...], normalized
 
 
+class CalibrationBlock(BaseModel):
+    """Calibration status. `baseline` is the baseline currently in use (defaults if uncalibrated)."""
+
+    state: CalibrationState = "uncalibrated"
+    progress: float = 0.0       # 0-1 while calibrating
+    remaining_s: float = 0.0    # frame-time seconds left while calibrating
+    message: str = ""           # instruction, "calibrated", or a failure reason
+    baseline: dict[str, float | bool] | None = None
+
+
 class FrameResult(BaseModel):
-    """Result for one frame. Later phases add task / risk blocks here."""
+    """Result for one frame. Later phases add risk blocks here."""
 
     frame_id: int
     timestamp_ms: float  # client-supplied frame timestamp, echoed back
     status: FrameStatus
     perf: PerfInfo = Field(default_factory=PerfInfo)
     face: FaceBlock = Field(default_factory=FaceBlock)
+    calibration: CalibrationBlock = Field(default_factory=CalibrationBlock)
+    drowsiness: TaskOutput | None = None   # None when disabled or face analysis unavailable
+    distraction: TaskOutput | None = None  # None when disabled or face analysis unavailable

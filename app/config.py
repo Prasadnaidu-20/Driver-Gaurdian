@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "default.yaml"
@@ -56,8 +56,78 @@ class UISettings(BaseModel):
     chart_window_s: float
 
 
+class BaselineDefaults(BaseModel):
+    ear_open: float
+    mar_closed: float
+    yaw: float
+    pitch: float
+    gaze_h: float
+    gaze_v: float
+
+
 class CalibrationSettings(BaseModel):
     duration_s: float
+    min_valid_fraction: float
+    min_open_ear: float
+    max_closed_mar: float
+    defaults: BaselineDefaults
+
+
+class LevelSettings(BaseModel):
+    """Hysteresis levels shared by the rule estimators (lowest level first)."""
+
+    levels: list[str]
+    enter: list[float]
+    exit: list[float]
+    min_enter_s: float
+    min_exit_s: float
+    score_ema_tau_s: float
+
+    @model_validator(mode="after")
+    def _check_lengths(self) -> "LevelSettings":
+        if not (len(self.levels) == len(self.enter) == len(self.exit)) or len(self.levels) < 2:
+            raise ValueError("levels, enter and exit must have the same length (≥ 2)")
+        return self
+
+
+class DrowsinessSettings(LevelSettings):
+    enabled: bool
+    closed_ratio: float
+    blink_threshold: float
+    ear_ignore_pitch_down_deg: float
+    max_gap_s: float
+    max_dt_s: float
+    microsleep_s: float
+    closure_full_s: float
+    perclos_window_s: float
+    perclos_min_span_s: float
+    perclos_low: float
+    perclos_high: float
+    blink_window_s: float
+    yawn_mar_threshold: float
+    yawn_mar_margin: float
+    yawn_min_s: float
+    yawn_window_s: float
+    yawn_count_full: float
+    yawn_weight: float
+
+
+class DistractionSettings(LevelSettings):
+    enabled: bool
+    yaw_limit_deg: float
+    pitch_down_limit_deg: float
+    pitch_up_limit_deg: float
+    use_gaze: bool
+    gaze_h_max_offset: float
+    gaze_v_max_offset: float
+    closed_ratio: float
+    max_gap_s: float
+    max_dt_s: float
+    glance_ignore_s: float
+    glance_full_s: float
+    window_s: float
+    fraction_low: float
+    fraction_high: float
 
 
 class LoggingSettings(BaseModel):
@@ -74,8 +144,8 @@ class Settings(BaseModel):
     face: FaceSettings
     ui: UISettings
     calibration: CalibrationSettings
-    drowsiness: SectionSettings
-    distraction: SectionSettings
+    drowsiness: DrowsinessSettings
+    distraction: DistractionSettings
     objects: SectionSettings
     emotion: SectionSettings
     risk: SectionSettings
